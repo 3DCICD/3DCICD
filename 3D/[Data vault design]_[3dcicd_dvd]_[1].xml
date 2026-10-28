@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<source_system xmlns="http://www.wherescape.com/xml/3D" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.wherescape.com/xml/3D ./source_system_50.xsd">
+  <xml_version>50</xml_version>
+  <source_application>WhereScape 3D</source_application>
+  <structure>
+    <table_types>
+      <table_type name="View">
+        <group>View</group>
+        <description>A view entity</description>
+        <colour>217,216,217</colour>
+        <object_icon>view_table.png</object_icon>
+        <positioning_characteristic>TERMINAL</positioning_characteristic>
+      </table_type>
+      <table_type name="Not ready for integration">
+        <description>Not ready for integration</description>
+        <colour>255,0,0</colour>
+        <positioning_characteristic>TERMINAL</positioning_characteristic>
+      </table_type>
+      <table_type name="Business Object">
+        <description>Business Object</description>
+        <colour>255,204,0</colour>
+        <positioning_characteristic>TERMINAL</positioning_characteristic>
+      </table_type>
+    </table_types>
+    <column_types>
+      <column_type name="Satellite low volatility">
+        <description>To create a Satellite with low volatile attributes</description>
+        <colour>254,244,125</colour>
+      </column_type>
+      <column_type name="Satellite medium volatility">
+        <description>To create a Satellite with medium volatile attributes</description>
+        <colour>255,208,0</colour>
+      </column_type>
+      <column_type name="Satellite high volatility">
+        <description>To create a Satellite with high volatile attributes</description>
+        <colour>239,155,15</colour>
+      </column_type>
+      <column_type name="Satellite transaction">
+        <description>To create a Satellite with transactional attributes</description>
+        <colour>255,186,0</colour>
+      </column_type>
+      <column_type name="Link business key">
+        <description>Foreign key attributes that make up the Link Business key (Do not rename)</description>
+        <colour>255,0,0</colour>
+      </column_type>
+      <column_type name="Link dependent child">
+        <description>Additional attributes that make up the Link Business key (Do not rename)</description>
+        <colour>127,0,0</colour>
+      </column_type>
+      <column_type name="Business key">
+        <description>The business key (Do not rename)</description>
+        <colour>0,0,255</colour>
+      </column_type>
+      <column_type name="Reference attribute">
+        <description>Reference fields</description>
+        <colour>227,204,255</colour>
+      </column_type>
+      <column_type name="Reference history attribute">
+        <description>Reference history fields</description>
+        <colour>227,127,255</colour>
+      </column_type>
+      <column_type name="Code attribute">
+        <description>Code fields</description>
+        <colour>192,192,192</colour>
+      </column_type>
+      <column_type name="Code history attribute">
+        <description>Code history fields</description>
+        <colour>153,153,153</colour>
+      </column_type>
+      <column_type name="Satellite multi-active attribute">
+        <description>To create a Satellite with Multi-Active attributes</description>
+        <colour>248,231,28</colour>
+      </column_type>
+      <column_type name="Satellite multi-active key">
+        <description>Multi Active Key used in conjoint with another Satellite attribute</description>
+        <colour>153,204,255</colour>
+      </column_type>
+      <column_type name="Berekend Attribuut">
+        <description>Uitkomst van een business rule</description>
+        <colour>0,255,0</colour>
+      </column_type>
+      <column_type name="Reference key">
+        <description>Reference fields</description>
+        <colour>255,153,204</colour>
+      </column_type>
+    </column_types>
+    <relationship_types>
+      <relationship_type name="Duplicate data">
+        <description>Duplicate data</description>
+        <colour>51,102,255</colour>
+      </relationship_type>
+    </relationship_types>
+    <table_ratings>
+      <table_rating>
+        <name>Mandatory</name>
+        <colour>255,0,0</colour>
+      </table_rating>
+      <table_rating>
+        <name>Preferred</name>
+        <colour>255,102,0</colour>
+      </table_rating>
+      <table_rating>
+        <name>Optional</name>
+        <colour>0,255,0</colour>
+      </table_rating>
+    </table_ratings>
+    <column_ratings>
+      <column_rating>
+        <name>Mandatory</name>
+        <colour>255,0,0</colour>
+      </column_rating>
+      <column_rating>
+        <name>Preferred</name>
+        <colour>255,102,0</colour>
+      </column_rating>
+      <column_rating>
+        <name>Optional</name>
+        <colour>0,255,0</colour>
+      </column_rating>
+    </column_ratings>
+    <rdbms_information>
+      <involved_databases>
+        <involved_rdbms>MS_SQL_SERVER</involved_rdbms>
+      </involved_databases>
+    </rdbms_information>
+    <storage_target_locations />
+    <tables>
+      <table name="Hub entity1">
+        <columns>
+          <column name="hub1">
+            <created_by>User</created_by>
+            <column_types>
+              <column_type name="Business key" />
+            </column_types>
+          </column>
+        </columns>
+        <table_icon>user_table.png</table_icon>
+        <source_sets />
+      </table>
+      <table name="Hub entity2">
+        <columns>
+          <column name="hub2">
+            <created_by>User</created_by>
+            <column_types>
+              <column_type name="Business key" />
+            </column_types>
+          </column>
+        </columns>
+        <table_icon>user_table.png</table_icon>
+        <source_sets />
+      </table>
+      <table name="Link entity1">
+        <columns>
+          <column name="hub1">
+            <created_by>User</created_by>
+            <column_types>
+              <column_type name="Link business key" />
+            </column_types>
+          </column>
+          <column name="hub2">
+            <created_by>User</created_by>
+            <column_types>
+              <column_type name="Link business key" />
+            </column_types>
+          </column>
+        </columns>
+        <table_icon>user_table.png</table_icon>
+        <source_sets />
+      </table>
+    </tables>
+    <relations>
+      <relation>
+        <fk_table>Link entity1</fk_table>
+        <fk_column>hub1</fk_column>
+        <referenced_table>Hub entity1</referenced_table>
+        <referenced_column>hub1</referenced_column>
+        <fk_constraint_name>FK_Link entity1_Hub entity1</fk_constraint_name>
+        <fk_sequence>10</fk_sequence>
+        <visible>true</visible>
+        <generated>false</generated>
+      </relation>
+      <relation>
+        <fk_table>Link entity1</fk_table>
+        <fk_column>hub2</fk_column>
+        <referenced_table>Hub entity2</referenced_table>
+        <referenced_column>hub2</referenced_column>
+        <fk_constraint_name>FK_Link entity1_Hub entity2</fk_constraint_name>
+        <fk_sequence>10</fk_sequence>
+        <visible>true</visible>
+        <generated>false</generated>
+      </relation>
+    </relations>
+    <schemas />
+  </structure>
+  <connections />
+  <notes>
+    <categories>
+      <category>
+        <name>Observation Note</name>
+        <colour>255,255,255</colour>
+      </category>
+    </categories>
+  </notes>
+  <effort_calculations>
+    <effort_calculation name="WhereScape Basic">
+      <calculation>(%connection_count%+1) * (%table_count% + (%column_count% / %table_count%))</calculation>
+      <description>WhereScape's basic calculation of business effort.</description>
+    </effort_calculation>
+  </effort_calculations>
+</source_system>
