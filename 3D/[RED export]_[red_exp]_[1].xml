@@ -314,13 +314,13 @@
     </rdbms_information>
     <storage_target_locations />
     <tables>
-      <table name="h_hub entity1">
+      <table name="h_hub_entity1">
         <label>hub entity1</label>
         <table_types>
           <table_type name="Hub" />
         </table_types>
         <columns>
-          <column name="hk_h_hub entity1" pk="true">
+          <column name="hk_h_hub_entity1" pk="true">
             <data_type size="32">char</data_type>
             <label>hk_h_hub entity1</label>
             <created_by>User</created_by>
@@ -372,7 +372,7 @@
                 <source_version>1</source_version>
               </source_mapping>
             </table_mappings>
-            <column_mappings column_name="hk_h_hub entity1" />
+            <column_mappings column_name="hk_h_hub_entity1" />
             <column_mappings column_name="hub1">
               <source_mapping>
                 <source_table>Hub entity1</source_table>
@@ -388,13 +388,13 @@
           </source_set>
         </source_sets>
       </table>
-      <table name="h_hub entity2">
+      <table name="h_hub_entity2">
         <label>hub entity2</label>
         <table_types>
           <table_type name="Hub" />
         </table_types>
         <columns>
-          <column name="hk_h_hub entity2" pk="true">
+          <column name="hk_h_hub_entity2" pk="true">
             <data_type size="32">char</data_type>
             <label>hk_h_hub entity2</label>
             <created_by>User</created_by>
@@ -446,7 +446,7 @@
                 <source_version>1</source_version>
               </source_mapping>
             </table_mappings>
-            <column_mappings column_name="hk_h_hub entity2" />
+            <column_mappings column_name="hk_h_hub_entity2" />
             <column_mappings column_name="hub2">
               <source_mapping>
                 <source_table>Hub entity2</source_table>
@@ -462,13 +462,13 @@
           </source_set>
         </source_sets>
       </table>
-      <table name="l_link entity1">
+      <table name="l_link_entity1">
         <label>link entity1</label>
         <table_types>
           <table_type name="Link" />
         </table_types>
         <columns>
-          <column name="hk_l_link entity1" pk="true">
+          <column name="hk_l_link_entity1" pk="true">
             <data_type size="32">char</data_type>
             <label>hk_l_link entity1</label>
             <created_by>User</created_by>
@@ -476,7 +476,7 @@
               <column_type name="Link hash key" />
             </column_types>
           </column>
-          <column name="hk_h_hub entity1">
+          <column name="hk_h_hub_entity1">
             <data_type size="32">char</data_type>
             <label>hk_h_hub entity1</label>
             <created_by>Surrogate key</created_by>
@@ -484,7 +484,7 @@
               <column_type name="Hub hash key" />
             </column_types>
           </column>
-          <column name="hk_h_hub entity2">
+          <column name="hk_h_hub_entity2">
             <data_type size="32">char</data_type>
             <label>hk_h_hub entity2</label>
             <created_by>Surrogate key</created_by>
@@ -543,10 +543,10 @@
                 <source_version>1</source_version>
               </source_mapping>
             </table_mappings>
-            <column_mappings column_name="hk_l_link entity1" />
-            <column_mappings column_name="hk_h_hub entity1">
+            <column_mappings column_name="hk_l_link_entity1" />
+            <column_mappings column_name="hk_h_hub_entity1">
               <source_mapping>
-                <source_table>l_link entity1</source_table>
+                <source_table>l_link_entity1</source_table>
                 <source_column>hub1</source_column>
                 <source_label>hub1</source_label>
                 <source_category>RED export</source_category>
@@ -554,9 +554,9 @@
                 <source_version>1</source_version>
               </source_mapping>
             </column_mappings>
-            <column_mappings column_name="hk_h_hub entity2">
+            <column_mappings column_name="hk_h_hub_entity2">
               <source_mapping>
-                <source_table>l_link entity1</source_table>
+                <source_table>l_link_entity1</source_table>
                 <source_column>hub2</source_column>
                 <source_label>hub2</source_label>
                 <source_category>RED export</source_category>
@@ -591,18 +591,18 @@
     </tables>
     <relations>
       <relation>
-        <fk_table>l_link entity1</fk_table>
-        <fk_column>hk_h_hub entity1</fk_column>
-        <referenced_table>h_hub entity1</referenced_table>
-        <referenced_column>hk_h_hub entity1</referenced_column>
+        <fk_table>l_link_entity1</fk_table>
+        <fk_column>hk_h_hub_entity1</fk_column>
+        <referenced_table>h_hub_entity1</referenced_table>
+        <referenced_column>hk_h_hub_entity1</referenced_column>
         <visible>true</visible>
         <generated>true</generated>
       </relation>
       <relation>
-        <fk_table>l_link entity1</fk_table>
-        <fk_column>hk_h_hub entity2</fk_column>
-        <referenced_table>h_hub entity2</referenced_table>
-        <referenced_column>hk_h_hub entity2</referenced_column>
+        <fk_table>l_link_entity1</fk_table>
+        <fk_column>hk_h_hub_entity2</fk_column>
+        <referenced_table>h_hub_entity2</referenced_table>
+        <referenced_column>hk_h_hub_entity2</referenced_column>
         <visible>true</visible>
         <generated>true</generated>
       </relation>
