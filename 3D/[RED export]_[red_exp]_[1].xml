@@ -314,7 +314,7 @@
     </rdbms_information>
     <storage_target_locations />
     <tables>
-      <table name="h_hub_entity1">
+      <table name="h_hub_entity1ms">
         <label>hub entity1</label>
         <table_types>
           <table_type name="Hub" />
@@ -593,7 +593,7 @@
       <relation>
         <fk_table>l_link_entity1</fk_table>
         <fk_column>hk_h_hub_entity1</fk_column>
-        <referenced_table>h_hub_entity1</referenced_table>
+        <referenced_table>h_hub_entity1ms</referenced_table>
         <referenced_column>hk_h_hub_entity1</referenced_column>
         <visible>true</visible>
         <generated>true</generated>
