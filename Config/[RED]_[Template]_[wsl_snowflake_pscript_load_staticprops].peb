@@ -1,0 +1,93 @@
+{# -- TemplateVersion:003 MinVersion:8510 MaxVersion:* TargetType:Snowflake ModelType:* TemplateType:PowerShell (64-bit) Script                                             -- #}
+{#                                                                                                                                                            -- #}
+{# --    (c) WhereScape Inc 2020. WhereScape Inc permits you to copy this Template solely for use with the RED software, and to modify this Template          -- #}
+{# --    for the purposes of using that modified Template with the RED software, but does not permit copying or modification for any other purpose.           -- #}
+{# --                                                                                                                                                         -- #}
+{# -- =============================================================================                                                                           -- #}
+{# --                                                                                                                                                         -- #}
+{# -- DBMS Name          : Snowflake                                                                                                                          -- #}
+{# -- Template Name      : wsl_snowflake_pscript_load_staticprops                                                                                             -- #}
+{# -- RED Version        : 8.5.1.0                                                                                                                            -- #}
+{# -- Description        : This template creates a Snowflake script specifically                                                                              -- #}
+{# --                      specifically designed for all RED load tables                                                                                      -- #}
+{# --                                                                                                                                                         -- #}
+{# -- =============================================================================                                                                           -- #}
+{# --                                                                                                                                                         -- #}
+{# --                                                                                                                                                         -- #}
+{#  Notes / History                                                                                                                                           -- #}
+{# -- TK: Powershell release V1   (2017-05-17)                                                                                                                -- #}
+{# -- TK: Powershell release V2   (2017-08-03)  Metadata service now used for extended properties fields                                                      -- #}
+{# -- TK: Powershell release V3   (2017-08-23)  File splitting added                                                                                          -- #}
+{# -- TK: Powershell release V4   (2017-09-19)  Extended COPY statement use to automatically apply RED after load transforms during the COPY.                 -- #}
+{# -- TK: Powershell release V5   (2018-02-08)  Powershell ODBC function replaced with compiled class to drastically improve load speeds.                     -- #}
+{# -- TK: Powershell release V6   (2018-05-14)  Fixed support for non CSV delimited files and removed unneccessary file copy when loading files from windows  -- #}
+{# -- TK: Powershell release V7   (2018-06-27)  Enabled file loads from external stages and stageless loads from azure blob storage                           -- #}
+{# -- JL: Powershell release V8   (2018-08-31)  Add support for delimiters, single and double quotes and back slashes in source data                          -- #}
+{# -- TK: Powershell release V9   (2018-11-08)  Removed Get-ExtendedProperty function from script as it exists in WslPowershellCommon module                  -- #}
+{# -- TK: Powershell release V10  (2018-11-09)  Fixed an issue where PUT couldnt handle paths with spaces                                                     -- #}
+{# -- TK: Powershell release V11  (2018-11-14)  Enabled configuration of extract delimiter, enclosure and escape characters                                   -- #}
+{# -- TK: Powershell release V11A (2018-11-14)  Changed to use extended properties fetched at script generation time rather than runtime                      -- #}
+{# -- JL: Powershell release V12 (2019-03-01)  Fixed a bug that caused ranges to fail on some databases due to double FROM clause                            -- #}
+{# -- TK: Powershell release V13 (2019-03-01)  Enabled file splitting for windows file loads                                                                 -- #}
+{# -- TK: Powershell release V14 (2019-03-02)  Enabled trigger files for windows file loads                                                                  -- #}
+{# -- TK: Powershell release V15 (2019-03-20)  Corrected issue introduced with trigger loads relating to fixed external stage loads                          -- #}
+{# -- JL: Powershell release V16 (2019-08-26)  Added support for file formats to reside in schema other than PUBLIC                                          -- #}
+{# -- PM: Powershell release V17 (2020-11-10)  Added PURGE option for COPY INTO Query                                                                        -- #}
+{# --                                                                                                                                                        -- #}
+{%- import "wsl_snowflake_utility" -%}
+{%- set dssRecordSrc = "DSS_RECORD_SOURCE" -%}
+#=============================================================================={%- br %}
+# DBMS Name        :    SNOWFLAKE {{table.dbType.name}}{%- br %}
+# Template         :    {{settings.template.name}}{%- br %}
+# Template Version :    8.3.1.0{%- br %}
+# Description      :    Load {{table.name}}{%- br %}
+# Generated by     :    {{env.productVersion}}{%- br %}
+# Generated for    :    {{env.licensedTo}}{%- br %}
+# Generated on     :    {{env.currentTimestamp}}{%- br %}
+# Author           :    {{env.userName}}{%- br %}
+{% if (table.loadInfo.sourceSchema) is defined %}
+{% if (table.loadInfo.sourceSchema != "") and (table.loadInfo.sourceTables != "") %}
+# Source Schema    :    {{table.loadInfo.sourceSchema}}{%- br %}
+# Source Table     :    {{table.loadInfo.sourceTables}}{%- br %}
+{% endif %}
+{% endif %}
+#=============================================================================={%- br %}
+# Notes / History{%- br %}
+#{%- br %}
+{% extends "wsl_snowflake_pscript_load" %}
+
+{% block "GetExtendedPropertyAll" %}
+    # Get extended property values{%- br %}
+    ${env:DEBUG}              = '{{ getExtendedProperty( propertyName = "SF_DEBUG_MODE" ) }}'{%- br %}
+    ${env:PURGE}              = '{{ getExtendedProperty( propertyName = "SF_PURGE" ) }}'{%- br %}
+    ${env:ACCESS_KEY}         = '{{ getExtendedProperty( propertyName = "SF_ACCESS_KEY" ) }}'{%- br %}
+    ${env:SECRET_KEY}         = '{{ getExtendedProperty( propertyName = "SF_SECRET_KEY" ) }}'{%- br %}
+    ${env:SEND_FILES_ZIPPED}  = '{{ getExtendedProperty( propertyName = "SF_SEND_FILES_ZIPPED" ) }}'{%- br %}
+    ${env:FILE_FORMAT}        = '{{ getExtendedProperty( propertyName = "SF_FILE_FORMAT" ) }}'{%- br %}
+    ${env:SNOWSQL_ACCOUNT}    = '{{ getExtendedProperty( propertyName = "SF_SNOWSQL_ACCOUNT" ) }}'{%- br %}
+    ${env:SNOWSQL_DATABASE}   = '{{ getExtendedProperty( propertyName = "SF_SNOWSQL_DATABASE" ) }}'{%- br %}
+    ${env:SNOWSQL_SCHEMA}     = '{{ getExtendedProperty( propertyName = "SF_SNOWSQL_SCHEMA" ) }}'{%- br %}
+    ${env:SNOWSQL_WAREHOUSE}  = '{{ getExtendedProperty( propertyName = "SF_SNOWSQL_WAREHOUSE" ) }}'{%- br %}
+    ${env:UNICODE_SUPPORT}    = '{{ getExtendedProperty( propertyName = "SF_UNICODE_SUPPORT" ) }}'{%- br %}
+    ${env:UNLOAD_DELIM}       = '{{ getExtendedProperty( propertyName = "SF_UNLOAD_DELIMITER", default = "|" ) }}'{%- br %}
+    ${env:UNLOAD_ENC}         = '{{ getExtendedProperty( propertyName = "SF_UNLOAD_ENCLOSED_BY", default = codepoint(34) ) }}'{%- br %}
+    ${env:UNLOAD_ESC}         = '{{ getExtendedProperty( propertyName = "SF_UNLOAD_ESCAPE_CHAR", default = "#" ) }}'{%- br %}
+    ${env:SPLIT_THRESHOLD}    = '{{ getExtendedProperty( propertyName = "SF_SPLIT_THRESHOLD" ) }}'{%- br %}
+    ${env:FILE_COUNT}         = '{{ getExtendedProperty( propertyName = "SF_SPLIT_COUNT" ) }}'{%- br %}
+    ${env:TIMEZONE}           = '{{ getExtendedProperty( propertyName = "SF_TIMEZONE" ) }}'{%- br %}
+    ${env:FILE_TYPE}          = '{{ getExtendedProperty( propertyName = "SF_FILE_TYPE", default = "CSV" ) }}'{%- br %}
+    ${env:EXTERNAL_STAGE}     = '{{ getExtendedProperty( propertyName = "SF_EXTERNAL_STAGE" ) }}'{%- br %}
+    ${env:AZ_SAS_TOKEN}       = '{{ getExtendedProperty( propertyName = "SF_AZURE_SAS_TOKEN" ) }}'{%- br %}
+    ${env:AZ_ENCRYPTION_TYPE} = '{{ getExtendedProperty( propertyName = "SF_AZURE_ENCRYPTION_TYPE" ) }}'{%- br %}
+    ${env:AZ_ENCRYPTION_KEY}  = '{{ getExtendedProperty( propertyName = "SF_AZURE_ENCRYPTION_KEY" ) }}'{%- br %}
+    ${env:GCS_STORAGE_INTEGRATION}  = '{{ getExtendedProperty( propertyName = "SF_GCS_STORAGE_INTEGRATION" ) }}'{%- br %}
+    ${env:GCS_STAGE_AREA_NAME}  = '{{ getExtendedProperty( propertyName = "SF_GCS_STAGE_AREA_NAME" ) }}'{%- br %}
+{% endblock %}
+
+{% block "GetExtendedProperty_s3prefix" %}{%br%}
+            $s3Prefix  = '{{ getExtendedProperty( propertyName ="SF_S3_BUCKET_PREFIX" ) }}'{%br%}
+{% endblock %}
+
+{% block "GetExtendedProperty_sourcePrefix" %}{%br%}
+    $sourcePrefix  = '{{ getExtendedProperty( propertyName ="SF_S3_BUCKET_PREFIX" ) }}'{%br%}
+{% endblock %}

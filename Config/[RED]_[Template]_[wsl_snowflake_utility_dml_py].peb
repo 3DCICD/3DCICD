@@ -1,0 +1,75 @@
+{# -- TemplateVersion:001 MinVersion:8510 MaxVersion:* TargetType:Snowflake ModelType:STAR,ODS,NORMAL TemplateType:Utility                                  -- #}
+{# --                                                                                                                                                       -- #}
+{# --    (c) WhereScape Inc 2020. WhereScape Inc permits you to copy this Template solely for use with the RED software, and to modify this Template        -- #}
+{# --    for the purposes of using that modified Template with the RED software, but does not permit copying or modification for any other purpose.         -- #}
+{# --                                                                                                                                                       -- #}
+{# -- =============================================================================                                                                         -- #}
+{# --                                                                                                                                                       -- #}
+{# -- DBMS Name          : SNOWFLAKE                                                                                                                        -- #}
+{# -- Template Name      : wsl_snowflake_utility_dml_py                                                                                                     -- #}
+{# -- RED Version        : 8.5.1.0                                                                                                                          -- #}
+{# -- Description        : Generic macros for Python based processing                                                                                       -- #}
+{# --                                                                                                                                                       -- #}
+{# -- =============================================================================                                                                         -- #}
+{# --                                                                                                                                                       -- #}
+{# --                                                                                                                                                       -- #}
+{# -- Notes / History                                                                                                                                       -- #}
+{# -- PM: Python based templates - initial version (2020-07-14)                                                                                             -- #}
+{# --                                                                                                                                                       -- #}
+
+
+
+{# -- This macro adds in logic for batch looping -- #}
+{% macro addBatchLoopSelectClause(indent="  ") %}
+{%- if settings.batchProcessingField != "" %}
+  {%- set sourceFound = false %}
+  {%- for col in table.columns %}
+    {%- if col.sourceColumn is defined and not sourceFound %}
+      {%- fetch col.sourceColumn %}
+      {%- if col.sourceColumn.name == settings.batchProcessingField %}{%br%}
+{{indent}}step = {% counter %}00{%br%}{%br%}
+{{indent}}sql = """SELECT DISTINCT {{col.source}} batch_start {%- br %}
+  {%- for joinLine in (table.sourceJoinDetails.join | lines)%}  {{joinLine}}{%br%}{%- endfor%}
+  {%- for whereLine in (table.sourceJoinDetails.where | lines)%}  {{whereLine}}{%br%}{%- endfor%}
+{{indent}}ORDER BY 1 {%- br %}
+{{indent}}""" {%- br %}
+{{indent}}DSN = str(os.environ.get('WSL_TGT_DSN',''))
+{{indent}}USER = str(os.environ.get('WSL_TGT_USER',''))
+{{indent}}PWD =  str(os.environ.get('WSL_TGT_PWD',''))
+{{indent}}SnowflakeLoop = WslPythonSnowflake.RunSnowflakeRedSQL(sql,DSN,USER,PWD, 'Failed batch distinct select from source tables step  '+ str(step)  , '',step,connection)
+{{indent}}connection=SnowflakeLoop[0]
+{%br%}
+{%- br %}
+{{indent}}for row in SnowflakeLoop[4]: {%- br %}
+{%- br %}
+{{indent}} if status == 1: {%- br %}
+{{indent}}   newvar = WslPythonCommon.WsWrkAudit("", "Processing batch : "+ str(row[0]),'','') {%- br %}
+{%- br %}
+        {%- set sourceFound = true %}
+      {%- endif %}
+    {%- endif %}
+  {%- endfor %}
+{%- endif %}
+{% endmacro %}
+
+
+{# -- This macro adds in logic for batch looping -- #}
+{% macro addBatchLoopWhereClause(indent = "      ", dssFlag = false) %}
+  {%- if table.sourceJoinDetails.where | trim != "" or dssFlag %}
+    {%- set nextWhere = "AND" %}
+  {%- else %}
+    {%- set nextWhere = "WHERE" %}
+  {%- endif %}
+  {%- if settings.batchProcessingField != "" %}
+    {%- set sourceFound = false %}
+    {%- for col in table.columns %}
+      {%- if col.sourceColumn is defined and not sourceFound %}
+        {%- fetch col.sourceColumn %}
+        {%- if col.sourceColumn.name == settings.batchProcessingField %}
+       {{nextWhere}} TO_VARCHAR({{col.source}}) = '"""+str(row[0])+"""'  {%br%}
+          {%- set sourceFound = true %}
+        {%- endif %}
+      {%- endif %}
+    {%- endfor %}
+  {%- endif %}
+{% endmacro %}

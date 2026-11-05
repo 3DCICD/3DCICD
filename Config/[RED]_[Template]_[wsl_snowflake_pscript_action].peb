@@ -1,0 +1,36 @@
+{# -- TemplateVersion:004 MinVersion:2100 MaxVersion:* TargetType:Snowflake ModelType:* TemplateType:PowerShell (64-bit) Script                                            -- #}
+{% extends "wsl_common_pscript_utility_action" %}
+{%- import "wsl_snowflake_utility" -%}
+Import-module -Name WslPowershellSnowflake -DisableNameChecking{%br%}
+
+{% block "ExecuteSQLBlock" %}
+function ExecuteSQLBlock($block){{"{"}}{%br%}
+  $tgtConn = New-Object System.Data.Odbc.OdbcConnection{%br%}
+  $status = 1{%br%}
+
+  if ([string]::IsNullOrEmpty($block)) {
+    return $status
+  }
+
+  $block -split [Regex]::Escape('{{options.endOfStatement}}') | Where-Object {$_.Trim() -gt 0} | ForEach-Object {
+    $stmt = $_ + ";"
+    WriteAudit "SQL: $stmt"
+    try {
+      $query_tag = Get-ExtendedProperty -PropertyName "SF_QUERY_TAG" -TableName "${env:WSL_LOAD_TABLE}"{%- br %}
+      $querytag_sql = "ALTER SESSION SET QUERY_TAG = $query_tag;"
+      $cmdResult = Run-Snowflake-RedSQL -sql $stmt -dsn ${env:WSL_TGT_DSN} -uid ${env:WSL_TGT_USER} -pwd ${env:WSL_TGT_PWD} -failureMsg "Failed " -odbcConn $tgtConn -status ([ref]$status)
+      if ( $status -ne 1 ) {
+        WriteAudit "Result: Failure - check detail log" 'audit' 'E'
+        throw "Execution failed. Status code: $status"
+      }
+      else {
+        WriteAudit "Result: Success"
+      }
+    }
+    catch{
+      throw $_.Exception.Message
+    }
+  }
+  return $status
+}
+{% endblock %}

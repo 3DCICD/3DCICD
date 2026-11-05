@@ -1,0 +1,10 @@
+import os
+from datetime import datetime
+ 
+today = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
+job_name = os.environ['WSL_JOB_NAME']
+job_key = os.environ['WSL_JOB_KEY']
+job_seq = os.environ['WSL_SEQUENCE']
+ 
+with open("c:\\temp\\failure.txt", "a", encoding="utf-8") as file:
+    file.write(f"{today}: Job Key: {job_key} Job Seq: {job_seq} Job Name: {job_name} failed \n")
