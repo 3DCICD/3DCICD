@@ -1,0 +1,549 @@
+{# -- TemplateVersion:001 MinVersion:21010 MaxVersion:* TargetType:* ModelType:* TemplateType:Utility       -- #}
+{# ############################ #}
+{# UTILITY MACROS AND FUNCTIONS #}
+{# ############################ #}
+
+{%- macro FetchLinkedTemplate(operationType, table = table, index = index, objectsByName = objectsByName) %}
+  {%- if table.codeGenSettings[operationType.code].template is defined -%}
+    {%- fetch table.codeGenSettings[operationType.code].template %}
+		{%- include table.codeGenSettings[operationType.code].template.name %}
+  {%- else -%}
+    No template associated for {{ operationType.name }}
+  {%- endif %}
+{%- endmacro -%}
+
+{%- import "wsl_snowflake_utility_dml" -%}
+{%- set isDSS = false %}{%br%}
+
+function WriteAudit($message, $type="audit", $statusCode="I"){{"{"}}{%br%}
+    $objJson = [PSCustomObject]@{
+        type = $type
+        message = $message
+        statusCode = $statusCode
+    }
+    ConvertTo-Json $objJson -Compress | Write-Host
+}
+
+{% block "ExecuteSQLBlock" %}
+function ExecuteSQLBlock($block){{"{"}}{%br%}
+  throw "ExecuteSQLBlock not implemented"
+}
+{% endblock %}
+
+function ExecuteScript($name){{"{"}}{%br%}
+    $prefix = [string]::Format("WSL_SCRIPT_{0}_",$name)
+    $command = [Environment]::GetEnvironmentVariable("${prefix}COMMAND")
+
+    if (![string]::IsNullOrEmpty($command)) {
+      Get-ChildItem Env:${prefix}* | ForEach-Object {
+          $unprefixedvar = $_.Name -replace $prefix, 'WSL_'
+          [Environment]::SetEnvironmentVariable($unprefixedvar,$_.Value)
+      }
+    }
+    else {
+      throw [string]::Format("Command not found for Script {0}",$name)
+    }
+
+    & cmd.exe /c ${env:WSL_COMMAND}
+
+    if ($LASTEXITCODE -ne 0) {
+      throw [string]::Format("Script execution failed with exit code: {0}. Check detail log for failure reason.",$LASTEXITCODE)
+    }
+}
+
+{# ########################### #}
+{# ACTION PROCESSING FUNCTIONS #}
+{# ########################### #}
+
+{# --------------- #}
+{# SOURCE MAPPINGS #}
+{# --------------- #}
+{% if table.sourceMappingId is defined %}
+function Run-Primary(){{"{"}}{%br%}
+  ExecuteScript '1'
+}
+
+function Run-Secondary(){{"{"}}{%br%}
+  ExecuteScript '2'
+}
+
+{# ---------- #}
+{# PROCEDURES #}
+{# ---------- #}
+{% elseif table.objectType == Types.ObjectType.Procedure %}
+{% if table.procedureType == Types.ProcedureType.Procedure %}
+{# STORED PROCEDURES #}
+function Run-CreateProcedure(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+{{table.code}}{%br%}
+"@
+}
+
+# Drop Procedure functionality will be supported in the future.
+# Users who are keen can create their own functions to achieve this functionality.
+function Run-DropProcedure(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+DROP function Run-IF EXISTS $OBJECT$
+"@
+}
+
+# Execute Procedure functionality will be supported in the future.
+# Users who are keen can create their own functions to achieve this functionality.
+function Run-ExecuteProcedure(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+SELECT * FROM $OBJECT$()
+"@ # TODO need an Execute Procedure template/block
+}
+{% else %}
+{# BLOCKS #}
+function Run-CreateProcedure(){{"{"}}{%br%}
+  throw "SQL Blocks cannot be created"
+}
+function Run-DropProcedure(){{"{"}}{%br%}
+  throw "SQL Blocks cannot be dropped"
+}
+function Run-ExecuteProcedure(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+{{table.code}}{%br%}
+"@
+}
+{% endif %}
+
+
+{# ------------ #}
+{# HOST SCRIPTS #}
+{# ------------ #}
+{% elseif table.objectType == Types.ObjectType.Script %}
+  {% error "Host Script objects shouldn't have Action Scripts!" %}
+
+
+{# ------- #}
+{# INDEXES #}
+{# ------- #}
+{% elseif table.objectType == Types.ObjectType.Index %}
+function Run-CreateIndex(){{"{"}}{%br%}
+  ExecuteSQLBlock @"{%br%}
+{{FetchLinkedTemplate(Types.OperationType.IndexCreateDDL, table=table.table, index=table)}}{%br%}
+"@
+}
+
+function Run-DropIndex(){{"{"}}{%br%}
+  ExecuteSQLBlock @"{%br%}
+{{FetchLinkedTemplate(Types.OperationType.IndexDropDDL, table=table.table, index=table)}}{%br%}
+"@{%br%}
+}
+{#function Run-AnalyzeIndex(){#}
+{#throw "Not implemented"#}
+{#}#}
+
+{# ----- #}
+{# VIEWS #}
+{# ----- #}
+{% elseif table.objectType == Types.ObjectType.View %}
+function Run-CreateView(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.CreateDDL)}}{%br%}
+"@{%br%}
+{%- for alias in table.viewInfo.viewAliases %}
+  {%- fetch alias %}
+  ExecuteSQLBlock @"
+  CREATE OR REPLACE VIEW {{alias.database}}.{{alias.schema}}.{{alias.name}}({% br %}
+{%- fetch table -%}
+{%- for column in table.columns %}
+  {%- set sTargetColumn = column.name %}
+  {%- if loop.last %}
+    {{sTargetColumn }}{%- br %}
+  {%- else -%}
+    {{sTargetColumn }},{%- br %}
+  {%- endif -%}
+{%- endfor -%}
+)COPY GRANTS{%- br %}
+AS{%- br %}
+SELECT {% if table.viewInfo.distinct %} DISTINCT{% endif %}{%- br %}
+{%- for column in table.columns %}
+{%-   if column.source | trim != "" %}
+{%-      set sSourceColumn = column.source %}
+{%-   else -%}
+{%-      set sSourceColumn = column.transform %}
+{%-   endif -%}
+{%-   if loop.last %}
+    {{table.name}}.{{column.name}}{%- br %}
+{%-   else -%}
+    {{table.name}}.{{column.name}},{%- br %}
+{%-   endif -%}
+{%- endfor -%}
+
+{%- if table.viewInfo.whereClause | trim == "" %}
+  FROM {{table.database}}.$OBJECT${%br%}
+{%- elseif table.viewInfo.whereClause | trim | upper | slice(0,4) != "FROM" %}
+  FROM {{table.database}}.$OBJECT${%br%}
+{%- endif -%}
+{%- if alias.viewInfo.whereClause | trim != "" %}
+  {{alias.viewInfo.whereClause | trim}}{%br%}
+{%- endif %}
+"@{%br%}
+{%- endfor %}
+}
+
+function Run-DropView(){{"{"}}{%br%}
+  {%- fetch table.target %}
+  ExecuteSQLBlock @"
+DROP VIEW IF EXISTS {{table.database}}.{{table.schema}}.{{table.name}};
+"@{%br%}
+{%- for alias in table.viewInfo.viewAliases %}
+  {%- fetch alias %}
+  ExecuteSQLBlock @"
+DROP VIEW IF EXISTS {{alias.database}}.{{alias.schema}}.{{alias.name}};{%br%}"@{%br%}
+{%- endfor %}
+}
+
+function Run-Primary(){{"{"}}{%br%}
+  ExecuteScript '1'
+}
+
+function Run-Secondary(){{"{"}}{%br%}
+  ExecuteScript '2'
+}
+
+function Run-Process(){{"{"}}{%br%}
+  Run-DropView
+  Run-CreateView
+  Run-Primary
+}
+
+{# ------- #}
+{# EXPORTS #}
+{# ------- #}
+{% elseif table.objectType == Types.ObjectType.Export %}
+function Run-Pre-Export-SQL(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+{{table.exportInfo.preExportSql}}{%br%}
+"@{%br%}
+}
+
+function Run-Primary(){{"{"}}{%br%}
+  Run-Pre-Export-SQL
+  ExecuteScript '1'
+}
+
+function Run-Secondary(){{"{"}}{%br%}
+  ExecuteScript '2'
+}
+
+{# ---------------------- #}
+{# LOAD TABLES #}
+{# ---------------------- #}
+{% elseif table.objectType == Types.ObjectType.Load %}
+function Run-CreateTable(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.CreateDDL)}}{%br%}
+"@
+}
+
+function Run-DropTable(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+{{table.target.connection.dropTableSQL}}{%br%}
+"@
+}
+
+function Run-TruncateTable(){{"{"}}{%br%}
+  {%- fetch table.target %}
+  $result = ExecuteSQLBlock @"
+{{table.target.connection.truncateSQL}}{%br%}
+"@
+  if ($result = $true) {
+    WriteAudit("Table Truncated")
+  }
+}
+
+function Run-Pre-Load-SQL(){{"{"}}{%br%}
+  {% if table.objectType == Types.ObjectType.Load %}
+  $result = ExecuteSQLBlock @"
+{{table.loadInfo.preLoadSql}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+	{% endif %}
+  if ($result = $true) {
+    WriteAudit("Pre-Load SQL Executed")
+  }
+}
+
+function Run-PreDrop(){{"{"}}{%br%}
+  {%- from table.indexes as index where index.dropBeforeUpdate %}
+    {%- fetch index %}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.IndexDropDDL)}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+  {%- endfrom %}
+}
+
+function Run-DropAll(){{"{"}}{%br%}
+  {%- from table.indexes as index %}
+    {%- fetch index %}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.IndexDropDDL)}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+  {%- endfrom %}
+}
+
+function Run-Build(){{"{"}}{%br%}
+  {%- from table.indexes as index where index.dropBeforeUpdate %}
+    {%- fetch index %}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.IndexCreateDDL)}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+  {%- endfrom %}
+}
+
+function Run-BuildAll(){{"{"}}{%br%}
+  {%- from table.indexes as index %}
+    {%- fetch index %}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.IndexCreateDDL)}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+  {%- endfrom %}
+}
+
+function Run-DssAfterLoad(){{"{"}}{%br%}
+  $result = ExecuteSQLBlock @"
+  UPDATE $OBJECT$ {% br %}
+  SET {% br %}
+  {%- from table.columns as column where (column.transformType.code == "A") %}
+  {%- set columnName = "" -%}
+  {%- if column.name is defined and column.transformType.code == "A"-%}
+      {%- set columnName = column.name | trim -%}
+  {%- endif -%}{% br %}
+      {%- set isDSS = true -%}
+  {{ columnName }} = {{column.source}}{% br %}
+  {%- if not loop.last -%}
+      ,
+  {%- endif -%}
+  {%- endfrom -%}{% br %}
+"@{%br%}
+  if ($result = $true) {
+    WriteAudit("DSS Columns Updated")
+  }
+}
+
+function Run-Process(){{"{"}}{%br%}
+   $preLoadAction = "{{table.loadInfo.preLoadAction.name}}"{%br%}
+  if ($preLoadAction -eq "Truncate") {
+    Run-TruncateTable
+  }
+  elseif ($preLoadAction -eq "Execute Pre-Load SQL") {
+    Run-Pre-Load-SQL
+  }
+  elseif ($preLoadAction -eq "Both Truncate and Execute Pre-Load SQL") {
+    Run-TruncateTable
+    Run-Pre-Load-SQL
+  }
+  Run-PreDrop
+  Run-Primary
+  Run-Build
+  {%- if isDSS == true %}{%br%}
+  Run-DssAfterLoad
+  {%- endif %}
+  {%- if table.postLoadProcedure is defined %}{%br%}
+  Run-Secondary{%br%}
+  {%- endif %}{%br%}
+}
+
+function Run-Initial(){{"{"}}{%br%}
+  Run-DropAll
+  Run-Secondary
+  Run-BuildAll
+}
+
+function Run-Primary(){{"{"}}{%br%}
+  ExecuteScript '1'
+}
+
+function Run-Secondary(){{"{"}}{%br%}
+  ExecuteScript '2'
+}
+
+function Run-AnalyzeTable(){{"{"}}{%br%}
+  throw "Not implemented"
+}
+
+{% else %}
+function Run-CreateTable(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.CreateDDL)}}{%br%}
+"@
+}
+
+function Run-DropTable(){{"{"}}{%br%}
+  ExecuteSQLBlock @"
+{{table.target.connection.dropTableSQL}}{%br%}
+"@
+}
+
+function Run-TruncateTable(){{"{"}}{%br%}
+  {%- fetch table.target %}
+  $result = ExecuteSQLBlock @"
+{{table.target.connection.truncateSQL}}{%br%}
+"@
+  if ($result = $true) {
+    WriteAudit("Table Truncated")
+  }
+}
+
+function Run-Pre-Load-SQL(){{"{"}}{%br%}
+  {% if table.objectType == Types.ObjectType.Load %}
+  $result = ExecuteSQLBlock @"
+{{table.loadInfo.preLoadSql}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+	{% endif %}
+  if ($result = $true) {
+    WriteAudit("Pre-Load SQL Executed")
+  }
+}
+
+function Run-PreDrop(){{"{"}}{%br%}
+  {%- from table.indexes as index where index.dropBeforeUpdate %}
+    {%- fetch index %}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.IndexDropDDL)}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+  {%- endfrom %}
+}
+
+function Run-DropAll(){{"{"}}{%br%}
+  {%- from table.indexes as index %}
+    {%- fetch index %}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.IndexDropDDL)}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+  {%- endfrom %}
+}
+
+function Run-Build(){{"{"}}{%br%}
+  {%- from table.indexes as index where index.dropBeforeUpdate %}
+    {%- fetch index %}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.IndexCreateDDL)}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+  {%- endfrom %}
+}
+
+function Run-BuildAll(){{"{"}}{%br%}
+  {%- from table.indexes as index %}
+    {%- fetch index %}
+  ExecuteSQLBlock @"
+{{FetchLinkedTemplate(Types.OperationType.IndexCreateDDL)}}{%br%}
+"@{%br%}
+  {%- else %}
+  # nothing to do{%br%}
+  {%- endfrom %}
+}
+
+
+function Run-Process(){{"{"}}{%br%}
+  Run-PreDrop
+  Run-Primary
+  Run-Build
+}
+
+function Run-Initial(){{"{"}}{%br%}
+  Run-DropAll
+  Run-Secondary
+  Run-BuildAll
+}
+
+function Run-Primary(){{"{"}}{%br%}
+  ExecuteScript '1'
+}
+
+function Run-Secondary(){{"{"}}{%br%}
+  ExecuteScript '2'
+}
+
+function Run-AnalyzeTable(){{"{"}}{%br%}
+  throw "Not implemented"
+}
+{% endif %}
+
+
+{# ################## #}
+{# SCRIPT ENTRY POINT #}
+{# ################## #}
+
+$actions = @{
+{% if table.sourceMappingId is defined %}
+  '{{Types.TaskActionType.Update.code}}' = 'Run-Primary'
+  '{{Types.TaskActionType.Custom.code}}' = 'Run-Secondary'
+{% elseif table.objectType == Types.ObjectType.Procedure %}
+  '{{Types.TaskActionType.Create.code}}' = 'Run-CreateProcedure'
+  '{{Types.TaskActionType.Drop.code}}' = 'Run-DropProcedure'
+  '{{Types.TaskActionType.Execute.code}}' = 'Run-ExecuteProcedure'
+{% elseif table.objectType == Types.ObjectType.Script %}
+  {% error "Host Script objects don't have Action Scripts!" %}
+{% elseif table.objectType == Types.ObjectType.Index %}
+  '{{Types.TaskActionType.Build.code}}' = 'Run-CreateIndex'
+  '{{Types.TaskActionType.Drop.code}}' = 'Run-DropIndex'
+  '{{Types.TaskActionType.Analyze.code}}' = 'Run-AnalyzeIndex'
+{% elseif table.objectType == Types.ObjectType.View %}
+  '{{Types.TaskActionType.Create.code}}' = 'Run-CreateView'
+  '{{Types.TaskActionType.Drop.code}}' = 'Run-DropView'
+  '{{Types.TaskActionType.Update.code}}' = 'Run-Primary'
+  '{{Types.TaskActionType.Custom.code}}' = 'Run-Secondary'
+  '{{Types.TaskActionType.Process.code}}'='Run-Process'
+{% elseif table.objectType == Types.ObjectType.Export %}
+  '{{Types.TaskActionType.Execute.code}}' = 'Run-Pre-Export-SQL'
+  '{{Types.TaskActionType.Process.code}}' = 'Run-Primary'
+  '{{Types.TaskActionType.Custom.code}}' = 'Run-Secondary'
+{% else %} {#- Loads and other objects #}
+  '{{Types.TaskActionType.Create.code}}' = 'Run-CreateTable'
+  '{{Types.TaskActionType.Drop.code}}' = 'Run-DropTable'
+  '{{Types.TaskActionType.Truncate.code}}' = 'Run-TruncateTable'
+  '{{Types.TaskActionType.PreDrop.code}}' = 'Run-PreDrop'
+  '{{Types.TaskActionType.DropAll.code}}' = 'Run-DropAll'
+  '{{Types.TaskActionType.Build.code}}' = 'Run-Build'
+  '{{Types.TaskActionType.BuildAll.code}}' = 'Run-BuildAll'
+  '{{Types.TaskActionType.Update.code}}' = 'Run-Primary'
+  '{{Types.TaskActionType.Custom.code}}' = 'Run-Secondary'
+  '{{Types.TaskActionType.Process.code}}' = 'Run-Process'
+	'{{Types.TaskActionType.Load.code}}' = 'Run-Process'
+  '{{Types.TaskActionType.Initial.code}}' = 'Run-Initial'
+  '{{Types.TaskActionType.Analyze.code}}' = 'Run-AnalyzeTable'
+{% endif %}
+}
+
+try {
+  if ($Args.Length -gt 0) {
+      $action = $Args[0]
+  }
+  else {
+      throw "Missing action code command-line parameter"
+  }
+  if (-not $actions.ContainsKey($action.ToString())) {
+      throw [string]::Format("Action code {0} is not implemented for {1} {2}",$action,'Load Table','load_customer')
+  }
+  # Run the action
+  & $actions[$action]
+
+  WriteAudit ([string]::Format("{0} completed successfully",$actions[$action])) "result" "S"
+  Exit 0
+}
+catch {
+  WriteAudit ([string]::Format("{0} failed. {1}",$actions[$action],$_.Exception.Message)) "result" "E"
+  Exit 2
+}

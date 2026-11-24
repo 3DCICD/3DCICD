@@ -1,0 +1,115 @@
+{# -- TemplateVersion:001 MinVersion:8510 MaxVersion:* TargetType:Snowflake ModelType:* TemplateType:Python Script                                           -- #}
+{% extends "wsl_common_pyscript_utility_action" %}
+{%- import "wsl_snowflake_utility" -%}
+
+
+{% block "ExecuteSQLBlock" %}
+def addapplicationid(connectionstring):{%- br %}
+    if connectionstring[-1] !=  ";": {%- br %}
+        connectionstring+=";application='Wherescape_SFEP'"{%- br %}
+    else: {%- br %}
+        connectionstring+="application='Wherescape_SFEP'"{%- br %}
+    return connectionstring {%- br %}
+{%- br %}
+
+def ExecuteSQLBlock(
+    block,
+    uidSF = str(os.environ.get('WSL_TGT_USER','')),
+    pwdSF = str(os.environ.get('WSL_TGT_PWD','')),
+    dsnSF = str(os.environ.get('WSL_TGT_DSN','')),
+    serverSF= str(os.environ.get('WSL_TGT_SERVER',''))
+    ):
+    if block.isspace() or block == "":
+        return True
+    try:
+        if os.environ.get("WSL_TGT_CONSTRING") != "":
+            SFConnectionString = os.environ.get('WSL_TGT_CONSTRING','')
+        else:
+            uid = uidSF
+            pwd = pwdSF
+            SFConnectionString = "DSN=" + dsnSF
+            if uid and not uid.isspace():
+              SFConnectionString += ";UID="+uid
+            if pwd and not pwd.isspace():
+              SFConnectionString += ";PWD="+pwd
+        SFConnectionString = addapplicationid(SFConnectionString)
+        SFConnection = pyodbc.connect(SFConnectionString, autocommit=True)
+        SFconn = SFConnection.cursor() {%- br %}
+        query_tag = WslPythonCommon.GetExtendedProperty("SF_QUERY_TAG", str(os.environ.get('WSL_LOAD_TABLE',''))).strip()
+        if query_tag and query_tag.strip():
+            query_sql = f"ALTER SESSION SET QUERY_TAG = '{query_tag}'"
+            SFconn.execute(query_sql)
+        try: {%- br %}
+            result = SFconn.execute(block)
+        except pyodbc.ProgrammingError as e: {%- br %}
+            if str(e) == 'No results.  Previous SQL was not a query.':
+                return True
+            else: {%- br %}
+                write_error(f"SQL error: {e}")
+                raise e{%br%}
+        SFconn.close(){%- br %}
+        return True
+    except Exception as exceptionError:
+        write_error(f"SQL error or connection error has occurred: {block}" + repr(exceptionError))
+        raise exceptionError{%br%}
+{% endblock %}{%br%}
+
+{% block "Ws_Call_Procedure" %}
+def Ws_Call_Procedure(
+    procName
+    ):
+    sequence = os.environ["WSL_SEQUENCE"]
+    jobName = os.environ["WSL_JOB_NAME"]
+    taskName = os.environ["WSL_TASK_NAME"]
+    jobId = os.environ["WSL_JOB_KEY"]
+    taskId = os.environ["WSL_TASK_KEY"]
+    try:
+        if os.environ.get('WSL_TGT_CONSTRING','') != "":
+            SFConnectionString  = os.environ.get('WSL_TGT_CONSTRING','')
+        else:
+            uid=str(os.environ.get('WSL_TGT_USER',''))
+            pwd=str(os.environ.get('WSL_TGT_PWD',''))
+            SFConnectionString  = "DSN="+str(os.environ.get('WSL_TGT_DSN',''))
+            if uid and not uid.isspace():
+                SFConnectionString += ";UID=" + uid
+            if pwd and not pwd.isspace():
+                SFConnectionString += ";PWD="+pwd
+        SFConnectionString = addapplicationid(SFConnectionString)
+        SFConnection = pyodbc.connect(SFConnectionString)
+        sql =f"""call {procName}(?,?,?,?,?);"""
+        Parameters=[sequence,jobName,taskName,jobId,taskId]
+        SFconn = SFConnection.cursor(){%- br %}
+        try:
+            SFconn.execute(sql,Parameters)
+        except pyodbc.Error as sql_error:
+            write_error(f"SQL error has occurred: {sql_error}")
+            raise sql_error
+        returnValues=SFconn.fetchall()
+        SFconn.commit()
+        SFconn.close()
+        returnValuesJson = json.loads(returnValues[0][0])
+        if returnValuesJson["p_status"] == 1:
+            return True, returnValuesJson["p_return_msg"]
+        else:
+            return False, returnValuesJson["p_return_msg"]
+    except  Exception as exceptionError:
+        write_error(f"Procedure error or connection error has occurred: {procName}")
+        raise exceptionError
+{% endblock %}
+
+{% block "ExecuteProcedure" %}
+def ExecuteProcedure(procName):
+    result = Ws_Call_Procedure(f"{procName}")
+    if result[0] == True:
+        scriptResultCode = 1
+        scriptResultMessage = result[1]
+        write_audit(f"Execution of Table {procName} completed successfully")
+        write_audit(str(scriptResultMessage))
+    else:
+        scriptResultMessage = result[1]
+        write_error(f"Execution of Table {procName} Failed")
+        write_error(str(scriptResultMessage))
+        raise Exception(f"Execution of Table {procName} Failed")
+{% endblock %}
+
+

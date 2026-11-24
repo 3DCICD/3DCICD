@@ -1,0 +1,51 @@
+{# -- TemplateVersion:001 MinVersion:8510 MaxVersion:* TargetType:Snowflake ModelType:* TemplateType:Python Script                                                  -- #}
+{#                                                                                                                                                           -- #}
+{# --    (c) WhereScape Inc 2020. WhereScape Inc permits you to copy this Template solely for use with the RED software, and to modify this Template         -- #}
+{# --    for the purposes of using that modified Template with the RED software, but does not permit copying or modification for any other purpose.          -- #}
+{# --                                                                                                                                                        -- #}
+{# -- =============================================================================                                                                          -- #}
+{# --                                                                                                                                                        -- #}
+{# -- DBMS Name          : Snowflake                                                                                                                         -- #}
+{# -- Template Name      : wsl_snowflake_pycript_load_staticprops                                                                                            -- #}
+{# -- RED Version        : 8.5.1.0                                                                                                                           -- #}
+{# -- Description        : This template creates a Snowflake script specifically                                                                             -- #}
+{# --                       designed for all RED load tables                                                                                                 -- #}
+{# --                                                                                                                                                        -- #}
+{# -- =============================================================================                                                                          -- #}
+{# --                                                                                                                                                        -- #}
+{# --                                                                                                                                                        -- #}
+{#  Notes / History                                                                                                                                          -- #}
+{% extends "wsl_snowflake_pyscript_load" %}
+{%- import "wsl_snowflake_utility" -%}
+
+{% block "GetExtendedPropertyAll" %}
+    #Set variables from extended properties{%br%}
+    os.environ["DEBUG"]              = '{{ getExtendedProperty( propertyName ="SF_DEBUG_MODE" ) }}'{%br%}
+    os.environ["PURGE"]              = '{{ getExtendedProperty( propertyName ="SF_PURGE" ) }}'{%br%}
+    os.environ["ACCESS_KEY"]         = '{{ getExtendedProperty( propertyName ="SF_ACCESS_KEY" ) }}'{%br%}
+    os.environ["SECRET_KEY"]         = '{{ getExtendedProperty( propertyName ="SF_SECRET_KEY" ) }}'{%br%}
+    os.environ["SEND_FILES_ZIPPED"]  = '{{ getExtendedProperty( propertyName ="SF_SEND_FILES_ZIPPED" ) }}'{%br%}
+    os.environ["FILE_FORMAT"]        = '{{ getExtendedProperty( propertyName ="SF_FILE_FORMAT" ) }}'{%br%}
+    os.environ["UNICODE_SUPPORT"]    = '{{ getExtendedProperty( propertyName ="SF_UNICODE_SUPPORT" ) }}'{%br%}
+    os.environ["UNLOAD_DELIM"]       = '{{ getExtendedProperty( propertyName ="SF_UNLOAD_DELIMITER" ) }}'{%br%}
+    os.environ["UNLOAD_ENC"]         = '{{ getExtendedProperty( propertyName ="SF_UNLOAD_ENCLOSED_BY", default = codepoint(34) ) }}'{%- br %}
+    os.environ["UNLOAD_ESC"]         = '{{ getExtendedProperty( propertyName ="SF_UNLOAD_ESCAPE_CHAR", default = "#" ) }}'{%- br %}
+    os.environ["SPLIT_THRESHOLD"]    = '{{ getExtendedProperty( propertyName ="SF_SPLIT_THRESHOLD" ) }}'{%br%}
+    os.environ["FILE_COUNT"]         = '{{ getExtendedProperty( propertyName ="SF_SPLIT_COUNT" ) }}'{%br%}
+    os.environ["TIMEZONE"]           = '{{ getExtendedProperty( propertyName ="SF_TIMEZONE" ) }}'{%br%}
+    os.environ["FILE_TYPE"]          = '{{ getExtendedProperty( propertyName ="SF_FILE_TYPE" , default = "CSV" ) }}'{%br%}
+    os.environ["EXTERNAL_STAGE"]     = '{{ getExtendedProperty( propertyName ="SF_EXTERNAL_STAGE" )}}'{%- br %}
+    os.environ["AZ_SAS_TOKEN"]       = '{{ getExtendedProperty( propertyName ="SF_AZURE_SAS_TOKEN" ) }}'{%br%}
+    os.environ["AZ_ENCRYPTION_TYPE"] = '{{ getExtendedProperty( propertyName ="SF_AZURE_ENCRYPTION_TYPE" ) }}'{%br%}
+    os.environ["AZ_ENCRYPTION_KEY"]  = '{{ getExtendedProperty( propertyName ="SF_AZURE_ENCRYPTION_KEY" ) }}'{%br%}
+    os.environ["GCS_STORAGE_INTEGRATION"]  = '{{ getExtendedProperty( propertyName ="SF_GCS_STORAGE_INTEGRATION" ) }}'{%br%}
+    os.environ["GCS_STAGE_AREA_NAME"]  = '{{ getExtendedProperty( propertyName ="SF_GCS_STAGE_AREA_NAME" ) }}'{%br%}
+{% endblock %}
+
+{% block "GetExtendedProperty_s3prefix" %}{%br%}
+            s3prefix = '{{ getExtendedProperty( propertyName ="SF_S3_BUCKET_PREFIX" ) }}'{%br%}
+{% endblock %}
+
+{% block "GetExtendedProperty_sourcePrefix" %}{%br%}
+    sourcePrefix = '{{ getExtendedProperty( propertyName ="SF_S3_BUCKET_PREFIX" ) }}'{%br%}
+{% endblock %}

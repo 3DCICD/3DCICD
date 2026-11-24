@@ -1,0 +1,1648 @@
+{# -- TemplateVersion:004 MinVersion:8510 MaxVersion:* TargetType:Snowflake ModelType:* TemplateType:PowerShell (64-bit) Script                                            -- #}
+{#                                                                                                                                                           -- #}
+{# --    (c) WhereScape Inc 2020. WhereScape Inc permits you to copy this Template solely for use with the RED software, and to modify this Template         -- #}
+{# --    for the purposes of using that modified Template with the RED software, but does not permit copying or modification for any other purpose.          -- #}
+{# --                                                                                                                                                        -- #}
+{# -- =============================================================================                                                                          -- #}
+{# --                                                                                                                                                        -- #}
+{# -- DBMS Name          : Snowflake                                                                                                                         -- #}
+{# -- Template Name      : wsl_snowflake_pscript_load                                                                                                        -- #}
+{# -- RED Version        : 8.5.1.0                                                                                                                           -- #}
+{# -- Description        : This template creates a Snowflake script specifically                                                                             -- #}
+{# --                      specifically designed for all RED load tables                                                                                     -- #}
+{# --                                                                                                                                                        -- #}
+{# -- =============================================================================                                                                          -- #}
+{# --                                                                                                                                                        -- #}
+{# --                                                                                                                                                        -- #}
+{#  Notes / History                                                                                                                                          -- #}
+{# -- TK: Powershell release V1  (2017-05-17)                                                                                                                -- #}
+{# -- TK: Powershell release V2  (2017-08-03)  Metadata service now used for extended properties fields                                                      -- #}
+{# -- TK: Powershell release V3  (2017-08-23)  File splitting added                                                                                          -- #}
+{# -- TK: Powershell release V4  (2017-09-19)  Extended COPY statement use to automatically apply RED after load transforms during the COPY.                 -- #}
+{# -- TK: Powershell release V5  (2018-02-08)  Powershell ODBC function replaced with compiled class to drastically improve load speeds.                     -- #}
+{# -- TK: Powershell release V6  (2018-05-14)  Fixed support for non CSV delimited files and removed unneccessary file copy when loading files from windows  -- #}
+{# -- TK: Powershell release V7  (2018-06-27)  Enabled file loads from external stages and stageless loads from azure blob storage                           -- #}
+{# -- JL: Powershell release V8  (2018-08-31)  Add support for delimiters, single and double quotes and back slashes in source data                          -- #}
+{# -- TK: Powershell release V9  (2018-11-08)  Removed Get-ExtendedProperty function from script as it exists in WslPowershellCommon module                  -- #}
+{# -- TK: Powershell release V10 (2018-11-09)  Fixed an issue where PUT couldnt handle paths with spaces                                                     -- #}
+{# -- TK: Powershell release V11 (2018-11-14)  Enabled configuration of extract delimiter, enclosure and escape characters                                   -- #}
+{# -- JL: Powershell release V12 (2019-03-01)  Fixed a bug that caused ranges to fail on some databases due to double FROM clause                            -- #}
+{# -- TK: Powershell release V13 (2019-03-01)  Enabled file splitting for windows file loads                                                                 -- #}
+{# -- TK: Powershell release V14 (2019-03-02)  Enabled trigger files for windows file loads                                                                  -- #}
+{# -- TK: Powershell release V15 (2019-03-20)  Corrected issue introduced with trigger loads relating to fixed external stage loads                          -- #}
+{# -- JL: Powershell release V16 (2019-08-26)  Added support for file formats to reside in schema other than PUBLIC                                          -- #}
+{# -- PM: Powershell release V17 (2020-11-10)  Added PURGE option for COPY INTO Query                                                                        -- #}
+{# --                                                                                                                                                        -- #}
+{%- set dssRecordSrc = "DSS_RECORD_SOURCE" -%}
+{% import "wsl_snowflake_utility" %}{%- br %}
+#=============================================================================={%- br %}
+# DBMS Name        :    SNOWFLAKE {{table.dbType.name}}{%- br %}
+# Template         :    {{settings.template.name}}{%- br %}
+# Template Version :    8.5.1.0{%- br %}
+# Description      :    Load {{table.name}}{%- br %}
+# Generated by     :    {{env.productVersion}}{%- br %}
+# Generated for    :    {{env.licensedTo}}{%- br %}
+# Generated on     :    {{env.currentTimestamp}}{%- br %}
+# Author           :    {{env.userName}}{%- br %}
+{% if (table.loadInfo.sourceSchema) is defined %}
+{% if (table.loadInfo.sourceSchema != "") and (table.loadInfo.sourceTables != "") %}
+# Source Schema    :    {{table.loadInfo.sourceSchema}}{%- br %}
+# Source Table     :    {{table.loadInfo.sourceTables}}{%- br %}
+{% endif %}
+{% endif %}
+#=============================================================================={%- br %}
+# Notes / History{%- br %}
+#{%- br %}
+Import-module -Name WslPowershellCommon -DisableNameChecking{%br%}
+Import-module -Name WslPowershellSnowflake -DisableNameChecking{%br%}
+Hide-Window{%br%}
+
+{%- set hasNonDssAfterLoads = false %}
+{%- from table.columns as col where col.transformType.code == "A" and not col.dss %}
+    {%- set hasNonDssAfterLoads = true -%}
+{% endfrom %}
+
+{% if (table.loadInfo.sourceConnectionType.name == "Configured Source Connection") and (table.loadInfo.sourceFile.path contains "GoogleDriveFiles")  %}
+  {%- if (table.loadInfo.uiConfigLoadProperties.fileID != "")  -%}
+    # Function to download files from Google Drive will be called from WslPowershellTemplate{% br -%}
+    Import-module -Name WslPowershellTemplate -DisableNameChecking{% br %}
+  {%- endif -%}
+{% endif %}
+
+{# -- This macro returns an encapuslation character to be used based on the value provided by user -- #}
+{% macro encapsulateString ( encString = "", encChars = "" ) %}
+  {%- if (encChars | trim | length) > 0 -%}
+    {%- set startChar = encChars | first  -%}
+    {%- set endChar = encChars | last  -%}
+    {%- if (startChar == encString | first) and ( endChar == encString | last ) -%}
+      {{ encString }}
+    {%- else -%}
+      {{ startChar + encString + endChar }}
+    {%- endif -%}
+  {%- else -%}
+    {{ encString }}
+  {%- endif -%}
+{% endmacro %}
+
+function WriteAudit($message, $type="audit", $statusCode="I") {
+    $outputJson = ConvertTo-Json @{message = $message; type = $type; statusCode = $statusCode} -Compress
+    if(Test-IsInteractive){
+      $logStream.WriteLine($outputJson)
+    }
+    else {
+      [Console]::WriteLine($message)
+    }
+}
+
+{#function WriteDetail($message) {#}
+{#    if(${env:DEBUG} -eq "TRUE"){#}
+{#        WriteAudit($message, $type="detail", $statusCode="I")#}
+{#    }#}
+{#}#}
+
+function Test-IsInteractive {
+  # determines if the script is being run from RED or a Scheduler
+  if ( ${env:WSL_JOB_KEY} -eq '0' -and ${env:WSL_JOB_NAME} -eq 'Develop' ) {
+    $true
+  }
+  else {
+    $false
+  }
+}
+
+
+function Exit-Script([int]$scrResCode=0, $scrResMsg="Success") {
+    if(Test-IsInteractive){
+      $scriptExitCode = 0
+      if ($scrResCode -eq 2) {
+          [Console]::WriteLine(-2)
+      } else {
+          [Console]::WriteLine(1)
+      }
+    }
+
+    else{
+      $scriptExitCode = $scrResCode
+      if ($scrResCode -ne 0) {
+        WriteAudit $scrResMsg "audit" "E"
+      }
+      else {
+        WriteAudit $scrResMsg "audit" "S"
+      }
+    }
+    Print-Log
+    Exit $scriptExitCode
+}
+
+function Exit-WithAction ([int]$scrResCode = 0, $scrResMsg = "Success") {
+    if (Test-IsInteractive) {
+        # Interactive Mode (like Python's is_red_interactive() True case)
+        $scriptExitCode = 0
+        if ($scrResCode -eq -1) {
+            # Non-zero exit: print -2 followed by message (Python behavior)
+            Write-Host -1
+        } elseif ($scrResCode -ne 0) {
+            Write-Host -2
+        } else {
+            Write-Host 1
+        }
+        Write-Host $scrResMsg   # Equivalent to print(message)
+    }
+    else {
+        # Scheduler Mode (like Python non-interactive block)
+        if ($scrResCode -eq -1) {
+            $outputJson = ConvertTo-Json @{message = $scrResMsg; type = "audit"; statusCode = "W"} -Compress
+            [Console]::WriteLine($outputJson)
+            $scriptExitCode = 0
+        }
+        elseif ($scrResCode -ne 0) {
+            $outputJson = ConvertTo-Json @{message = $scrResMsg; type = "audit"; statusCode = "E"} -Compress
+            [Console]::WriteLine($outputJson)
+            $scriptExitCode = $scrResCode
+        }
+        else {
+            $outputJson = ConvertTo-Json @{message = $scrResMsg; type = "audit"; statusCode = "S"} -Compress
+            [Console]::WriteLine($outputJson)
+            $scriptExitCode = 0
+        }
+    }
+
+    Print-Log
+    Exit $scriptExitCode
+}
+
+function Print-Log { {%- br %}
+    $logStream.Dispose(){%- br %}
+    $logReader = New-Object IO.StreamReader($fileAud){%- br %}
+    {%- br %}
+    while( ! $logReader.EndOfStream) { {%- br %}
+        if(Test-IsInteractive){
+            [Console]::WriteLine($logReader.ReadLine()){%- br %}
+        }
+        else {
+            $outputJson = ConvertTo-Json @{message = $logReader.ReadLine(); type = 'audit'; statusCode = 'I'} -Compress
+            [Console]::WriteLine($outputJson)
+        }
+    }{%- br %}
+    {%- br %}
+    $logReader.Dispose(){%- br %}
+}{%- br %}
+{%- br %}
+Function Replace-WslTags($stuff) { {%- br %}
+    {%- br %}
+    if([string]::IsNullOrWhitespace($stuff)) { {%- br %}
+        return $stuff{%- br %}
+    }{%- br %}
+    {%- br %}
+    if($stuff.Contains('$SEQUENCE$')) { {%- br %}
+        $stuff = $stuff.Replace('$SEQUENCE$',${env:WSL_SEQUENCE}){%- br %}
+    }{%- br %}
+    {%- br %}
+    if([regex]::IsMatch($stuff,'\$.+\$')) { {%- br %}
+        # If $stuff contains two or more $s and the $SEQUENCE$ string is not detected
+        # or has already been replaced then we assume a date
+        while([regex]::IsMatch($stuff,'\$.+\$')) { {%- br %}
+            $startPos = $stuff.IndexOf('$'){%- br %}
+            {%- br %}
+            $work = $stuff.SubString($startPos + 1){%- br %}
+            $endPos = $work.IndexOf('$'){%- br %}
+            {%- br %}
+            $suppliedFormat = $work.SubString(0, $endPos){%- br %}
+            $dateFormat = $suppliedFormat.Replace('YY','yy').Replace('DD','dd').Replace('HH','hh').Replace('MI','mm').Replace('SS','ss'){%- br %}
+            $dateString = (Get-Date -f $dateFormat){%- br %}
+            $replaceString = '$' + $suppliedFormat + '$'{%- br %}
+            {%- br %}
+            $stuff = $stuff.Replace($replaceString,$dateString){%- br %}
+        }{%- br %}
+    }{%- br %}
+    {%- br %}
+    if($stuff.indexOf('$') -ne -1) { {%- br %}
+        ${env:warn} = $true{%- br %}
+        $logStream.WriteLine("Unclosed '$' tag in '$stuff'"){%- br %}
+        $logStream.WriteLine("Unclosed '$' will be removed"){%- br %}
+        $stuff = $stuff.Replace('$',''){%- br %}
+    }{%- br %}
+    return $stuff.Trim(){%- br %}
+}{%- br %}
+{%- br %}
+{% if (table.loadInfo.archiveFile.path != "") or (table.loadInfo.archiveFile.name != "") and (table.loadInfo.sourceConnectionType.name == "Windows") %}
+# File archiving function for windows file loads
+function Archive-Files { {%- br %}
+    param ({%- br %}
+        [array]$files{%- br %}
+    ){%- br %}
+    $ArchivePath = @'{%- br %}
+{{ table.loadInfo.archiveFile.path }}{%- br %}
+'@{%- br %}
+    $ArchiveName = @'
+{{ table.loadInfo.archiveFile.name }}{%- br %}
+'@{%- br %}
+    {%- br %}
+    if(($runMode -ne "S3") -and ($runmode -ne "AZ") -and ($runmode -ne "GCS")) { {%- br %}
+        if([string]::IsNullOrWhitespace($ArchivePath)) { {%- br %}
+            $ArchivePath = (gci $files[0]).Directory.FullName{%- br %}
+        }{%- br %}
+        {%- br %}
+        if( ! $ArchivePath.EndsWith('\')) { {%- br %}
+            $ArchivePath += "\"{%- br %}
+        }{%- br %}
+        {%- br %}
+        if ($files.Count -gt 1) { {%- br %}
+            if(! [string]::IsNullOrWhitespace($ArchivePath)) { {%- br %}
+                if( ! [string]::IsNullOrWhitespace($ArchiveName)) { {%- br %}
+                    ${env:warn} = $true{%- br %}
+                    $logStream.WriteLine("Files will be moved but not renamed"){%- br %}
+                    $logStream.WriteLine("Renaming is not supported for multi file loads"){%- br %}
+                }{%- br %}
+                {%- br %}
+                $dir = Replace-WslTags(${ArchivePath}){%- br %}
+                foreach($file in $files) { {%- br %}
+                    try { {%- br %}
+                        if( ! (Test-Path -Path $dir)) { {%- br %}
+                            $null = New-Item -ItemType Directory -Path $dir{%- br %}
+                        }{%- br %}
+                        Move-Item $file $dir -ErrorAction Stop{%- br %}
+                        $logStream.WriteLine("$file moved to $dir"){%- br %}
+                    }{%- br %}
+                    catch { {%- br %}
+                        ${env:warn} = $true
+                        $logStream.WriteLine("Failed to move " + $file + " to " + $dir){%- br %}
+                        $logStream.WriteLine($_.Exception.Message){%- br %}
+                        $logStream.WriteLine($_.InvocationInfo.PositionMessage){%- br %}
+                    }{%- br %}
+                }{%- br %}
+            }{%- br %}
+            else { {%- br %}
+                if( ! [string]::IsNullOrWhitespace($ArchiveName)) { {%- br %}
+                    ${env:warn} = $true{%- br %}
+                    $logStream.WriteLine("Only moving (not renaming) is supported for multi file loads"){%- br %}
+                }{%- br %}
+            }{%- br %}
+        }{%- br %}
+        else { {%- br %}
+            try { {%- br %}
+                $dir = Replace-WslTags(${ArchivePath}){%- br %}
+                $fil = Replace-WslTags(${ArchiveName}){%- br %}
+                $path = $dir + $fil
+                if( ! (Test-Path -Path $dir)) {
+                    $null = New-Item -ItemType Directory -Path $dir
+                }
+                Move-Item $files[0] $path -ErrorAction Stop{%- br %}
+                $logStream.WriteLine("Source file moved to " + $path){%- br %}
+            }{%- br %}
+            catch { {%- br %}
+                ${env:warn} = $true{%- br %}
+                $logStream.WriteLine("Failed to move " + $files[0] + " to " + ${path}){%- br %}
+                $logStream.WriteLine($_.Exception.Message){%- br %}
+                $logStream.WriteLine($_.InvocationInfo.PositionMessage){%- br %}
+                {%- br %}
+            }{%- br %}
+        }{%- br %}
+    }{%- br %}
+}{%- br %}
+{%- br %}
+{%- endif %}
+{% if (table.loadInfo.triggerArchiveFile.path != "") or (table.loadInfo.triggerArchiveFile.name != "") and (table.loadInfo.sourceConnectionType.name == "Windows") %}
+# File archiving function for windows file loads
+function Archive-Trigger { {%- br %}
+    param ({%- br %}
+        [array]$files{%- br %}
+    ){%- br %}
+    $ArchivePath = @'{%- br %}
+{{ table.loadInfo.triggerArchiveFile.path }}{%- br %}
+'@{%- br %}
+    $ArchiveName = @'
+{{ table.loadInfo.triggerArchiveFile.name }}{%- br %}
+'@{%- br %}
+    {%- br %}
+    if(($runMode -ne "S3") -and ($runmode -ne "AZ") -and ($runmode -ne "GCS")) { {%- br %}
+        if([string]::IsNullOrWhitespace($ArchivePath)) { {%- br %}
+            $ArchivePath = (gci $files[0]).Directory.FullName{%- br %}
+        }{%- br %}
+        {%- br %}
+        if( ! $ArchivePath.EndsWith('\')) { {%- br %}
+            $ArchivePath += "\"{%- br %}
+        }{%- br %}
+        {%- br %}
+        if ($files.Count -gt 1) { {%- br %}
+            if(! [string]::IsNullOrWhitespace($ArchivePath)) { {%- br %}
+                if( ! [string]::IsNullOrWhitespace($ArchiveName)) { {%- br %}
+                    ${env:warn} = $true{%- br %}
+                    $logStream.WriteLine("Files will be moved but not renamed"){%- br %}
+                    $logStream.WriteLine("Renaming is not supported for multi file loads"){%- br %}
+                }{%- br %}
+                {%- br %}
+                $dir = Replace-WslTags(${ArchivePath}){%- br %}
+                foreach($file in $files) { {%- br %}
+                    try { {%- br %}
+                        if( ! (Test-Path -Path $dir)) { {%- br %}
+                            $null = New-Item -ItemType Directory -Path $dir{%- br %}
+                        }{%- br %}
+                        Move-Item $file $dir -ErrorAction Stop{%- br %}
+                        $logStream.WriteLine("$file moved to $dir"){%- br %}
+                    }{%- br %}
+                    catch { {%- br %}
+                        ${env:warn} = $true
+                        $logStream.WriteLine("Failed to move " + $file + " to " + $dir){%- br %}
+                        $logStream.WriteLine($_.Exception.Message){%- br %}
+                        $logStream.WriteLine($_.InvocationInfo.PositionMessage){%- br %}
+                    }{%- br %}
+                }{%- br %}
+            }{%- br %}
+            else { {%- br %}
+                if( ! [string]::IsNullOrWhitespace($ArchiveName)) { {%- br %}
+                    ${env:warn} = $true{%- br %}
+                    $logStream.WriteLine("Only moving (not renaming) is supported for multi file loads"){%- br %}
+                }{%- br %}
+            }{%- br %}
+        }{%- br %}
+        else { {%- br %}
+            try { {%- br %}
+                $dir = Replace-WslTags(${ArchivePath}){%- br %}
+                $fil = Replace-WslTags(${ArchiveName}){%- br %}
+                $path = $dir + $fil
+                if( ! (Test-Path -Path $dir)) {
+                    $null = New-Item -ItemType Directory -Path $dir
+                }
+                Move-Item $files[0] $path -ErrorAction Stop{%- br %}
+                $logStream.WriteLine("Trigger file moved to " + $path){%- br %}
+            }{%- br %}
+            catch { {%- br %}
+                ${env:warn} = $true{%- br %}
+                $logStream.WriteLine("Failed to move " + $files[0] + " to " + ${path}){%- br %}
+                $logStream.WriteLine($_.Exception.Message){%- br %}
+                $logStream.WriteLine($_.InvocationInfo.PositionMessage){%- br %}
+                {%- br %}
+            }{%- br %}
+        }{%- br %}
+    }{%- br %}
+}{%- br %}
+{%- br %}
+{%- endif %}
+Function Gzip-File { {%- br %}
+    param({%- br %}
+        [string]$inFile = $(throw "No input file specified"),{%- br %}
+        [string]$outFile = $inFile + ".gz",{%- br %}
+        [switch]$removeOriginal = $false{%- br %}
+    ){%- br %}
+    {%- br %}
+    $input = New-Object IO.FileStream $InFile, ([IO.FileMode]::Open), ([IO.FileAccess]::Read), ([IO.FileShare]::Read){%- br %}
+    $output = New-Object IO.FileStream $OutFile, ([IO.FileMode]::Create), ([IO.FileAccess]::Write), ([IO.FileShare]::None){%- br %}
+    $gzipStream = New-Object IO.Compression.GzipStream $Output, ([IO.Compression.CompressionLevel]::Fastest){%- br %}
+    {%- br %}
+    $input.CopyTo($gzipStream){%- br %}
+    {%- br %}
+    $gzipStream.Dispose(){%- br %}
+    $output.Dispose(){%- br %}
+    $input.Dispose(){%- br %}
+    {%- br %}
+    if($removeOriginal) { {%- br %}
+        Remove-Item -Path $inFile{%- br %}
+    }{%- br %}
+    {%- br %}
+    return (gci $outFile).FullName{%- br %}
+}{%- br %}
+{%- br %}
+
+$query_tag = Get-ExtendedProperty -PropertyName "SF_QUERY_TAG" -TableName "${env:WSL_LOAD_TABLE}"{%- br %}
+$querytag_sql = "ALTER SESSION SET QUERY_TAG = $query_tag;"
+function Load-Data { {%- br %}
+{% block "GetExtendedPropertyAll" %}
+    # Get extended property values{%- br %}
+    ${env:DEBUG}              = Get-ExtendedProperty -PropertyName "SF_DEBUG_MODE" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:PURGE}              = Get-ExtendedProperty -PropertyName "SF_PURGE" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:ACCESS_KEY}         = Get-ExtendedProperty -PropertyName "SF_ACCESS_KEY" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:SECRET_KEY}         = Get-ExtendedProperty -PropertyName "SF_SECRET_KEY" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:SEND_FILES_ZIPPED}  = Get-ExtendedProperty -PropertyName "SF_SEND_FILES_ZIPPED" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:FILE_FORMAT}        = Get-ExtendedProperty -PropertyName "SF_FILE_FORMAT" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:UNICODE_SUPPORT}    = Get-ExtendedProperty -PropertyName "SF_UNICODE_SUPPORT" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:UNLOAD_DELIM}       = Get-ExtendedProperty -PropertyName "SF_UNLOAD_DELIMITER" -TableName ${env:WSL_LOAD_TABLE}{% br %}
+    ${env:UNLOAD_ENC}         = Get-ExtendedProperty -PropertyName "SF_UNLOAD_ENCLOSED_BY" -TableName ${env:WSL_LOAD_TABLE}{% br %}
+    ${env:UNLOAD_ESC}         = Get-ExtendedProperty -PropertyName "SF_UNLOAD_ESCAPE_CHAR" -TableName ${env:WSL_LOAD_TABLE}{% br %}
+    ${env:SPLIT_THRESHOLD}    = Get-ExtendedProperty -PropertyName "SF_SPLIT_THRESHOLD" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:FILE_COUNT}         = Get-ExtendedProperty -PropertyName "SF_SPLIT_COUNT" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:TIMEZONE}           = Get-ExtendedProperty -PropertyName "SF_TIMEZONE" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:FILE_TYPE}          = Get-ExtendedProperty -PropertyName "SF_FILE_TYPE" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:EXTERNAL_STAGE}     = Get-ExtendedProperty -PropertyName "SF_EXTERNAL_STAGE" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:AZ_SAS_TOKEN}       = Get-ExtendedProperty -PropertyName "SF_AZURE_SAS_TOKEN" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:AZ_ENCRYPTION_TYPE} = Get-ExtendedProperty -PropertyName "SF_AZURE_ENCRYPTION_TYPE" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:AZ_ENCRYPTION_KEY}  = Get-ExtendedProperty -PropertyName "SF_AZURE_ENCRYPTION_KEY" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:GCS_STORAGE_INTEGRATION} = Get-ExtendedProperty -PropertyName "SF_GCS_STORAGE_INTEGRATION" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+    ${env:GCS_STAGE_AREA_NAME} = Get-ExtendedProperty -PropertyName "SF_GCS_STAGE_AREA_NAME" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+{% endblock %}
+    {%- br %}
+    if(${env:UNICODE_SUPPORT} -ne "TRUE") { {%- br %}
+        ${env:UNICODE_SUPPORT} = "FALSE"{%- br %}
+    }{%- br %}
+    if(${env:SEND_FILES_ZIPPED} -ne "TRUE") { {%- br %}
+        ${env:SEND_FILES_ZIPPED} = "FALSE"{%- br %}
+    }{%- br %}
+    if(${env:FILE_COUNT} -lt 1) { {%- br %}
+        ${env:FILE_COUNT} = 1{%- br %}
+    }{%- br %}
+    if([string]::IsNullOrEmpty(${env:UNLOAD_DELIM})) { {%- br %}
+        ${env:UNLOAD_DELIM} = "|"{%- br %}
+    }{%- br %}
+    if([string]::IsNullOrEmpty(${env:UNLOAD_ENC})) { {%- br %}
+        ${env:UNLOAD_ENC} = '"'{%- br %}
+    }{%- br %}
+    if([string]::IsNullOrEmpty(${env:UNLOAD_ESC})) { {%- br %}
+        ${env:UNLOAD_ESC} = "#"{%- br %}
+    }{%- br %}
+    if([string]::IsNullOrEmpty(${env:FILE_TYPE})) { {%- br %}
+        ${env:FILE_TYPE} = "CSV"{%- br %}
+    }{%- br %}
+    {%- br %}
+    {%- br %}
+    if ( ![string]::IsNullOrWhiteSpace(${env:EXTERNAL_STAGE})){
+     $PURGE = "FALSE"{%- br %}
+     if ( ![string]::IsNullOrWhiteSpace(${env:PURGE})){
+        $PURGE = ${env:PURGE}{%- br %}
+	  }
+    }
+    else{
+     $PURGE = "TRUE"{%- br %}
+		 if ( ![string]::IsNullOrWhiteSpace(${env:PURGE})){
+        $PURGE = ${env:PURGE}{%- br %}
+     }
+		}
+    # Work out full file format name{%- br %}
+    Add-Type -Path $(Join-Path -Path ${env:WSL_BINDIR} -ChildPath 'WslMetadataServiceClient.dll')
+    $metaDbType = [WslMetadataServiceClient.MetaDatabaseType]::SqlServer
+    # Metadata DSN, Meta DB Type enum, Metadata User, Metadata Password, Metadata schema and lastly maybe 64bit
+    if ([System.Environment]::Is64BitProcess) {
+        $metaArch = [WslMetadataServiceClient.Architecture]::_64bit
+        $repo = New-Object WslMetadataServiceClient.Repo(${env:WSL_META_DSN},$metaDbType,${env:WSL_META_USER},${env:WSL_META_PWD},"${env:WSL_META_SCHEMA}",$metaArch)
+    }
+    else {
+        $repo = New-Object WslMetadataServiceClient.Repo(${env:WSL_META_DSN},$metaDbType,${env:WSL_META_USER},${env:WSL_META_PWD},"${env:WSL_META_SCHEMA}")
+    }
+    $root = $repo.objectsByName
+    $fileFormatObject = $root[${env:FILE_FORMAT}]
+		${env:fileFormatDatabase} = $fileFormatObject.target.database.GetValue()
+    ${env:fileFormatSchema} = $fileFormatObject.target.schema.GetValue()
+    ${env:fileFormatFullName} = ""
+    if( ! [string]::IsNullOrEmpty(${env:fileFormatDatabase})) { ${env:fileFormatFullName} += ${env:fileFormatDatabase} + "." }
+    if( ! [string]::IsNullOrEmpty(${env:fileFormatSchema})) { ${env:fileFormatFullName} += ${env:fileFormatSchema} + "." }
+    ${env:fileFormatFullName} += ${env:FILE_FORMAT}
+
+    if(${env:DEBUG} -eq "TRUE") { {%- br %}
+        $logStream.WriteLine("=================== LOAD OPTIONS ==================="){%- br %}
+        $logStream.WriteLine("Specified Load Table:        " + ${env:WSL_LOAD_TABLE}){%- br %}
+        $logStream.WriteLine("Specified Work Dir:          " + ${env:WSL_WORKDIR}){%- br %}
+        $logStream.WriteLine("Specified Sequence:          " + ${env:WSL_SEQUENCE}){%- br %}
+        $logStream.WriteLine("Specified Metadata ODBC DSN: " + ${env:WSL_META_DSN}){%- br %}
+        $logStream.WriteLine("Specified Metadata Username: " + ${env:WSL_META_USER}){%- br %}
+        $logStream.WriteLine("Specified Metadata Password: " + (New-Object string ('*', ${env:WSL_META_PWD}.Length))){%- br %}
+        $logStream.WriteLine(""){%- br %}
+        if($runMode -eq 'S3') {
+            $logStream.WriteLine("=================== CONNECTION OPTIONS ==================="){%- br %}
+            $logStream.WriteLine("Access Key:                  " + (New-Object string ('*', ${env:ACCESS_KEY}.Length))){%- br %}
+            $logStream.WriteLine("Secret Key:                  " + (New-Object string ('*', ${env:SECRET_KEY}.Length))){%- br %}
+            $logStream.WriteLine(""){%- br %}
+        }
+        elseif($runmode -eq "AZ") {
+            $logStream.WriteLine("=================== CONNECTION OPTIONS ==================="){%- br %}
+            $logStream.WriteLine("SAS Token:                          " + (New-Object string ('*', ${env:AZ_SAS_TOKEN}.Length))){%- br %}
+            $logStream.WriteLine("Encryption Method:                  " + ${env:AZ_ENCRYPTION_TYPE}){%- br %}
+              $logStream.WriteLine("Encryption Key:                     " + (New-Object string ('*', ${env:AZ_ENCRYPTION_KEY}.Length))){%- br %}
+            $logStream.WriteLine(""){%- br %}
+        }
+        elseif($runmode -eq "GCS") {
+            $logStream.WriteLine("=================== CONNECTION OPTIONS ==================="){%- br %}
+            $logStream.WriteLine("GCS STORAGE INTEGRATION:                  " + ${env:GCS_STORAGE_INTEGRATION}){%- br %}
+            $logStream.WriteLine("GCS STAGE AREA NAME:                     " + ${env:GCS_STAGE_AREA_NAME}){%- br %}
+            $logStream.WriteLine(""){%- br %}
+        }
+        $logStream.WriteLine("=================== MODES ==================="){%- br %}
+        $logStream.WriteLine("Specified Debug Mode:        " + ${env:DEBUG}){%- br %}
+        $logStream.WriteLine("Specified Run Mode:          " + $runMode){%- br %}
+        $logStream.WriteLine("Unicode Extract:             " + ${env:UNICODE_SUPPORT}){%- br %}
+        $logStream.WriteLine(""){%- br %}
+        if($runMode -eq 'Database') {
+            $logStream.WriteLine("=================== SOURCE TABLE INFO ==================="){%- br %}
+            $logStream.WriteLine("Source Schema:               " + ${env:WSL_SRC_SCHEMA}){%- br %}
+            $logStream.WriteLine("Source Tables:               " + @"
+{{ table.loadInfo.sourceTables }}{%- br %}
+"@){%- br %}
+            $logStream.WriteLine("Source Where:                " + @"
+{{ table.loadInfo.whereAndGroupByClauses }}{%- br %}
+"@){%- br %}
+            $logStream.WriteLine(""){%- br %}
+            $logStream.WriteLine("=================== SOURCE DB INFO ==================="){%- br %}
+            $logStream.WriteLine("ODBC Source DSN:             " + ${env:WSL_SRC_DSN}){%- br %}
+            $logStream.WriteLine("ODBC Source Username:        " + ${env:WSL_SRC_USER}){%- br %}
+            $logStream.WriteLine("ODBC Source Password:        " + (New-Object string ('*', ${env:WSL_SRC_PWD}.Length))){%- br %}
+            $logStream.WriteLine(""){%- br %}
+        }
+        $logStream.WriteLine("=================== EXTENDED PROPERTIES ==================="){%- br %}
+        $logStream.WriteLine("SF_FILE_FORMAT:           " + ${env:FILE_FORMAT}){%- br %}
+        $logStream.WriteLine("fileFormatFullName:       " + ${env:fileFormatFullName}){%- br %}
+        $logStream.WriteLine("SF_SEND_FILES_ZIPPED:     " + ${env:SEND_FILES_ZIPPED}){%- br %}
+        $logStream.WriteLine("SF_UNLOAD_DELIMITER:      " + ${env:UNLOAD_DELIM}){%- br %}
+        $logStream.WriteLine("SF_UNLOAD_ENCLOSED_BY:    " + ${env:UNLOAD_ENC}){%- br %}
+        $logStream.WriteLine("SF_UNLOAD_ESCAPE_CHAR:    " + ${env:UNLOAD_ESC}){%- br %}
+        $logStream.WriteLine("SF_SPLIT_THRESHOLD:       " + ${env:SPLIT_THRESHOLD}){%- br %}
+        $logStream.WriteLine("SF_SPLIT_COUNT:           " + ${env:FILE_COUNT}){%- br %}
+        $logStream.WriteLine("SF_TIMEZONE:              " + ${env:TIMEZONE}){%- br %}
+        $logStream.WriteLine("SF_FILE_TYPE:             " + ${env:FILE_TYPE}){%- br %}
+        $logStream.WriteLine("SF_EXTERNAL_STAGE:        " + ${env:EXTERNAL_STAGE}){%- br %}
+        $logStream.WriteLine("SF_AZURE_SAS_TOKEN:       " + ${env:AZ_SAS_TOKEN}){%- br %}
+        $logStream.WriteLine("SF_AZURE_ENCRYPTION_TYPE: " + ${env:AZ_ENCRYPTION_TYPE}){%- br %}
+        $logStream.WriteLine("SF_AZURE_ENCRYPTION_KEY:  " + ${env:AZ_ENCRYPTION_KEY}){%- br %}
+        $logStream.WriteLine("SF_PURGE:  " + ${env:PURGE}){%- br %}
+        $logStream.WriteLine(""){%- br %}
+        $logStream.WriteLine("=================== Connection Method ==================="){%- br %}
+        $wsl_tgt_connstring = ${env:WSL_TGT_CONSTRING}
+        $wsl_meta_connstring = ${env:WSL_META_CONSTRING}
+        $wsl_src_connstring = ${env:WSL_SRC_CONSTRING}
+        if ($wsl_tgt_connstring -ne "") {
+            $logStream.WriteLine("Target connected with Advanced connect Method")
+        }
+        if ($wsl_meta_connstring -ne "") {
+            $logStream.WriteLine("Metadata connected with Advanced connect Method")
+        }
+        if ($wsl_src_connstring -ne "") {
+            $logStream.WriteLine("Source connected with Advanced connect Method")
+        }
+        $logStream.WriteLine(""){%- br %}
+    }{%- br %}
+    {%- br %}
+    {% if (table.loadInfo.sourceConnectionType.name == "ODBC") or (table.loadInfo.sourceConnectionType.name == "Database") -%}
+    $filePath = ${env:WSL_WORKDIR}
+
+    if (${env:WSL_LOAD_TABLE}.Length -gt 140) {
+        # Trim it to 140 characters from the beginning
+        $loadTable = ${env:WSL_LOAD_TABLE}.Substring(0, 140)
+        $fileDat = "wsl$loadTable${env:WSL_SEQUENCE}"
+    } else {
+        # Use the original value
+        $fileDat = "wsl${env:WSL_LOAD_TABLE}${env:WSL_SEQUENCE}"
+    }
+
+
+    {%- br %}
+    $logStream.WriteLine("================= CLEANUP FILES ==================="){%- br %}
+    foreach($df in $((Get-ChildItem "${filePath}${fileDat}*").FullName)){
+        $logStream.WriteLine("Cleaning file $df"){%- br %}
+        Remove-Item -Path $df
+    }
+    $logStream.WriteLine("Cleaning ${fileDat} from SnowFlake stage"){%- br %}
+    if (![string]::IsNullOrEmpty($query_tag)) {
+      $snowsqlDelete = "snowsql -q ""rm @~ pattern='.*$fileDat.*'"" --query_tag ""$query_tag"" -o friendly=false  -o remove_comments=true -o timing=false"
+    }else{
+      $snowsqlDelete = "snowsql -q ""rm @~ pattern='.*$fileDat.*'"" -o friendly=false  -o remove_comments=true -o timing=false"
+    }
+    $putRes = & $([ScriptBlock]::Create($snowsqlDelete)){%- br %}
+    $logStream.WriteLine("================= EXTRACT SQL ====================="){%- br %}
+    {%- set empty = "" %}
+    {%- if table.loadInfo.selectDistinctValues == true %}
+      {%- set distinct = true %}
+    {% else %}
+      {%- set distinct = false %}
+    {%- endif %}
+    {%- br %}
+    {%- if table.loadInfo.overrideLoadSQL | trim != "" %}
+    $extractSql = @"
+    {{table.loadInfo.overrideLoadSQL}}{%- br %}
+"@{%- br %}
+    {% elseif table.loadInfo.useOverrideSourceColumns == true %}
+    $extractSql = @"
+    SELECT {%- if distinct%} DISTINCT{%- else %}{%- endif %}
+    {{table.loadInfo.overrideSourceColumns}}{%- br %}
+    {%- if table.loadInfo.sourceTables != "" -%}FROM ${env:WSL_SRC_SCHEMA}.{{ table.loadInfo.sourceTables }} {%- br %}{% endif %}
+    {%- from table.loadInfo.whereAndGroupByClauses | lines as whereLine %}
+     {{ whereLine }}{% br %}
+    {%- endfrom %}
+"@{%- br %}
+    {% else %}
+    {%- set srcEncChars = getExtendedProperty( propertyName = "SOURCE_ENCAPSULATION_CHARACTERS" ) -%}{%- br %}
+    $extractSql = @"
+    SELECT {%- if distinct%} DISTINCT{%- else %}{%- endif %}
+      {%- from table.columns as column where (column.sourceColumn is defined or column.transformType.code == "D") %}
+        {%- if not loop.first %}    , {% else %} {% endif %}
+        {%- if column.transformType.code != "A" and column.transformType.code != "" %}
+          {{- column.source }}
+        {%- else %}
+          {%- if column.sourceTable is defined %}
+            {%- fetch column.sourceTable %}
+            {{- encapsulateString(column.sourceTable.name, srcEncChars) }}.
+          {%- endif %}
+          {%- if column.sourceColumn is defined %}
+            {{- encapsulateString(column.sourceColumn.name, srcEncChars) }}
+          {%- endif %}
+        {%- endif %}
+        {%- br %}
+      {%- endfrom %}
+    {%- if table.loadInfo.sourceTables != "" -%}FROM ${env:WSL_SRC_SCHEMA}.{{- encapsulateString(table.loadInfo.sourceTables, srcEncChars) }} {%- br %}{% endif %}
+    {%- from table.loadInfo.whereAndGroupByClauses | lines as whereLine %}
+    {{ whereLine }}{% br %}
+    {%- endfrom %}
+"@{%- br %}
+    {%- endif %} {%- br %}
+    $logStream.WriteLine($extractSql){%- br %}
+    $logStream.WriteLine(""){%- br %}
+    {%- br %}
+    if(${env:DEBUG} -eq "TRUE") { {%- br %}
+        $logStream.WriteLine("BEGIN create of data file from source system: $(Get-Date)"){%- br %}
+    }{%- br %}
+    $unicode = $false
+    if( ${env:UNICODE_SUPPORT} -eq "TRUE") {
+        $unicode = $true
+    }
+    $OdbcDump = Get-OdbcDumpSource
+    Add-Type -TypeDefinition $OdbcDump -Language CSharp -ReferencedAssemblies "System.Data"
+    $wslOdbc = New-Object WhereScape.OdbcDump
+    #GetDataToFile(string query, string dsn, string username, string password, string dataFile, string delimiter, int fileCount, int splitThreshold, bool addQuotes, bool unicode, string enclosedBy, string escapeChar)
+
+
+    try { {%- br %}
+        $rowCount = $wslOdbc.GetDataToFile($extractSQL,${env:WSL_SRC_DSN},${env:WSL_SRC_USER},${env:WSL_SRC_PWD},"${filePath}${fileDat}",${env:UNLOAD_DELIM}, ${env:FILE_COUNT}, ${env:SPLIT_THRESHOLD}, $true, $unicode, ${env:UNLOAD_ENC}, ${env:UNLOAD_ESC})
+    }{%- br %}
+    catch { {%- br %}
+        $null = WsWrkAudit -Status "E" -Message "An error has occurred: $_.Exception.Message"
+        $scriptResultCode = 2{%- br %}
+        $scriptResultMessage = "Load failed"{%- br %}
+        $logStream.WriteLine($_.Exception.Message){%- br %}
+        $logStream.WriteLine($_.InvocationInfo.PositionMessage){%- br %}
+        Exit-Script $scriptResultCode $scriptResultMessage{%- br %}
+    }{%- br %}
+
+
+    if(${env:DEBUG} -eq "TRUE") { {%- br %}
+        $logStream.WriteLine("END create of data file from source system: $(Get-Date)"){%- br %}
+    }{%- br %}
+    if($rowCount -lt 1) { {%- br %}
+        $logStream.WriteLine("Source query returned 0 rows"){%- br %}
+        $scriptResultCode = 0{%- br %}
+        $scriptResultMessage = "Source query returned 0 rows"{%- br %}
+        Exit-Script $scriptResultCode $scriptResultMessage{%- br %}
+    }{%- br %}
+    $dataFiles = New-Object System.Collections.Generic.List[string]
+    foreach($df in $((Get-ChildItem "${filePath}${fileDat}*").FullName)){
+        $null = $dataFiles.Add($df)
+    }
+    {%- else %}
+    $fileDat = @"
+{{ table.loadInfo.sourceFile.name }}{%- br %}
+"@
+    $fileHeader = "{{ table.loadInfo.sourceFile.headerLine }}"
+    if($runMode -eq "Windows" -and [string]::IsNullOrWhiteSpace(${env:EXTERNAL_STAGE})) { {%- br %}
+        $filePath = "{{ table.loadInfo.sourceFile.path }}"{%- br %}
+
+        $LOAD_FILE = Join-Path -Path $filePath -ChildPath $fileDat{%- br %}
+        {%- if table.loadInfo.triggerFile.name|trim != "" %}
+        $TRGFILE = Join-Path -Path '{{ table.loadInfo.triggerFile.path }}' -ChildPath '{{ table.loadInfo.triggerFile.name }}'{% br %}
+        {%- endif %}
+        {% br %}
+        {%- if table.loadInfo.wait %}
+        # **********************************************************
+        # ************* W A I T     T I M E R **********************
+        # **********************************************************
+        # If a wait time specified then loop looking for the file
+        # or trigger file to arrive until the wait time expires.{% br %}
+        {%- if table.loadInfo.triggerFile.name|trim != "" %}
+        $WAITFILE = $TRGFILE{% br %}
+        {%- else %}
+        $WAITFILE = $LOAD_FILE{% br %}
+        {%- endif %}
+        $WAITSECS = {{ table.loadInfo.waitSeconds }}{% br %}
+        :waitloop while($WAITSECS -gt 0) {
+            # see if the file exists and if so skip the wait check
+            if(Test-Path $WAITFILE) {
+                break waitloop
+            }
+            Start-Sleep 5
+            $WAITSECS = $WAITSECS - 5
+        }
+        # Finished our wait loop. See if we have the file
+        {% br %}
+        {%- endif %}
+        # **********************************************************
+        # ************* F I L E    C H E C K ***********************
+        # **********************************************************{% br %}
+        {% if table.loadInfo.triggerFile.name|trim != "" %}
+        $CHKFILE = $TRGFILE{% br %}
+        if( ! (Test-Path $TRGFILE) ) { {%- br %}
+            {%- if table.loadInfo.waitAction is defined %}
+              {%- if table.loadInfo.waitAction.name == "Warning" %}
+            $scriptResultCode = -1{%- br %}
+              {%- elseif table.loadInfo.waitAction.name == "Error" %}
+            $scriptResultCode = -2{%- br %}
+              {%- elseif table.loadInfo.waitAction.name == "Fatal Error" %}
+            $scriptResultCode = -3{%- br %}
+              {%- elseif table.loadInfo.waitAction.name == "Success" %}
+            $scriptResultCode = 0{%- br %}
+              {%- endif %}
+            {%- else %}
+            $scriptResultCode = 2
+            {%- endif %}
+            $scriptResultMessage = "File $TRGFILE was not found after waiting for {{ table.loadInfo.waitSeconds }} seconds."
+            Exit-WithAction $scriptResultCode $scriptResultMessage
+        }
+        {%- endif -%}
+        if( ! (Test-Path $LOAD_FILE) ) { {%- br %}
+            {%- if table.loadInfo.waitAction is defined %}
+              {%- if table.loadInfo.waitAction.name == "Warning" %}
+            $scriptResultCode = -1{%- br %}
+              {%- elseif table.loadInfo.waitAction.name == "Error" %}
+            $scriptResultCode = -2{%- br %}
+              {%- elseif table.loadInfo.waitAction.name == "Fatal Error" %}
+            $scriptResultCode = -3{%- br %}
+              {%- elseif table.loadInfo.waitAction.name == "Success" %}
+            $scriptResultCode = 0{%- br %}
+              {%- endif %}
+            {%- else %}
+            $scriptResultCode = 2
+            {%- endif %}
+            $scriptResultMessage = "File $LOAD_FILE was not found after waiting for {{ table.loadInfo.waitSeconds }} seconds."
+            Exit-WithAction $scriptResultCode $scriptResultMessage
+        }
+        {%- br %}
+        $dataFiles = New-Object System.Collections.Generic.List[string]
+        foreach($df in $((Get-ChildItem (Join-Path -Path $filePath -ChildPath $fileDat) -ErrorAction Stop ).FullName)){
+            $null = $dataFiles.Add($df)
+        }
+        $sourceFiles = $dataFiles.Clone()
+        $rowCount = 0 {%- br %}
+        $dfc = $dataFiles.Clone()
+        $dataFiles.Clear()
+        $dataFiles = New-Object System.Collections.Generic.List[string]
+        $originalDat = $fileDat
+        foreach ($sourceFile in $dfc) {
+
+            $lineCounter = [IO.File]::OpenText($sourceFile)
+            while (! $lineCounter.EndOfStream) {
+                $null = $lineCounter.ReadLine()
+                $rowCount ++
+            }
+            if($fileHeader -eq "true") {
+                $rowCount --
+            }
+            $lineCounter.Dispose()
+
+            $cleanedDat = $originalDat.Replace("*","")
+            if(${env:FILE_COUNT} -gt 1) {
+
+                $filePath = ${env:WSL_WORKDIR}
+
+                if($rowCount -ge ${env:SPLIT_THRESHOLD}) {
+                    $fileToSplit = New-Object System.IO.StreamReader($sourceFile)
+                    $swl = New-Object System.Collections.Generic.List[System.IO.StreamWriter]
+                    for($i = 0; $i -lt ${env:FILE_COUNT}; $i++) {
+                        $threeDigits = $i.ToString("000")
+                        $newName = $(Get-Item $sourceFile).Name.Replace($cleanedDat,$cleanedDat + "_" + ${env:WSL_SEQUENCE} + "-" + ${env:WSL_TASK_KEY}) + "_p" + $threeDigits
+                        $splitPath = Join-Path ${env:WSL_WORKDIR} $newName
+                        $null = $dataFiles.Add($splitPath)
+                        $sw = New-Object System.IO.StreamWriter($splitPath,$false)
+                        $sw.AutoFlush = $true
+                        $swl.Add($sw)
+                        if(${env:DEBUG} -eq "TRUE") {
+                            $logStream.WriteLine("Source file '$(Get-Item $sourceFile).Name' Part ${threeDigits}: $splitPath")
+                        }
+                    }
+
+                    $swNum = 0
+                    if($fileHeader -eq "true") {
+                        $headerLine = $fileToSplit.ReadLine()
+                        foreach($sw in $swl) {
+                            $sw.WriteLine($headerLine)
+                        }
+                    }
+                    while(! $fileToSplit.EndOfStream){
+                        $line = $fileToSplit.ReadLine()
+
+                        if($swNum -ge ${env:FILE_COUNT})
+                        {
+                            $swNum = 0
+                        }
+                        $swl[$swNum].WriteLine($line);
+                        $swNum++
+                    }
+                    $fileToSplit.Dispose()
+                }
+                else {
+                    $newName = $(Get-Item $sourceFile).Name.Replace($cleanedDat,$cleanedDat + "_" + ${env:WSL_SEQUENCE} + "-" + ${env:WSL_TASK_KEY}) + "_p000"
+                    $notSplitPath = Join-Path ${env:WSL_WORKDIR} $newName
+                    $null = Copy-Item $sourceFile $notSplitPath
+
+                    $null = $dataFiles.Add($notSplitPath)
+                    if(${env:DEBUG} -eq "TRUE") {
+                        $logStream.WriteLine("Source file '$(Get-Item $sourceFile).Name' Part 000: $notSplitPath")
+                    }
+                }
+                $fileDat = $cleanedDat + "_" + ${env:WSL_SEQUENCE} + "-" + ${env:WSL_TASK_KEY} + "*"
+            }
+            else {
+                $null = $dataFiles.Add($sourceFile)
+            }
+        }
+        foreach($sw in $swl) {
+            $sw.Dispose()
+        }
+        $logStream.WriteLine("")
+    }{%- br %}
+    else { {%- br %}
+        $filePath = $sourcePrefix{%- br %}
+        if( ! $filePath.endsWith('/')) { {%- br %}
+            $filePath += '/'{%- br %}
+        }{%- br %}
+    }{%- br %}
+    {%- endif %}
+    if(($runMode -ne "S3") -and ($runmode -ne "AZ") -and ($runmode -ne "GCS") -and [string]::IsNullOrWhiteSpace(${env:EXTERNAL_STAGE})) {
+        $sourcePath = $filePath
+        for($x = 0; $x -lt $dataFiles.Count; $x++) {
+            $originalName = $dataFiles[$x]
+            if(${env:SEND_FILES_ZIPPED} -eq "TRUE") { {% br %}
+                {%- if table.loadInfo.sourceConnectionType.name == "Windows" %}
+                $noPath = (Get-Item $dataFiles[$x]).Name
+                if($env:FILE_COUNT -lt 2) {
+                    $noPath = $noPath.Replace($cleanedDat,$cleanedDat + "_" + ${env:WSL_SEQUENCE} + "-" + ${env:WSL_TASK_KEY})
+                }
+                $newName = Join-Path -Path ${env:WSL_WORKDIR} -ChildPath $($noPath + ".gz"){% br %}
+                {%- endif %}
+                $dataFiles[$x] = Gzip-File -inFile $originalName{% if table.loadInfo.sourceConnectionType.name != "Windows" %} -RemoveOriginal{% else %} -OutFile $newName{% endif %}{% br %}
+                {%- if table.loadInfo.sourceConnectionType.name == "Windows" %}
+                $filePath = ${env:WSL_WORKDIR}{% br %}
+                $logStream.WriteLine("File '$originalName' GZipped to '$newName' prior to upload")
+                {%- else %}
+                $logStream.WriteLine("File '$originalName' GZipped to '$($dataFiles[$x])' prior to upload")
+                {%- endif %}
+            }
+        }{%- br %}
+        {%- if table.loadInfo.sourceConnectionType.name == "Windows" %}
+        if($env:FILE_COUNT -lt 2) {
+            if(${env:SEND_FILES_ZIPPED} -eq "TRUE") { {% br %}
+                $fileDat = $cleanedDat + "_" + ${env:WSL_SEQUENCE} + "-" + ${env:WSL_TASK_KEY} + "*"
+            }
+        }{%- br %}
+        {%- endif %}
+    }{%- br %}
+    $logStream.WriteLine("================= LOAD ================="){%- br %}
+    $sfOdbc = New-Object System.Data.Odbc.OdbcConnection
+    if (! [string]::IsNullOrEmpty(${env:WSL_TGT_CONSTRING})){
+        $sfOdbc.ConnectionString = ${env:WSL_TGT_CONSTRING}
+    }else {
+        $sfOdbc.ConnectionString = "DSN=${env:WSL_TGT_DSN}"
+        if( ! [string]::IsNullOrEmpty(${env:WSL_TGT_USER})) { $sfOdbc.ConnectionString += ";UID=${env:WSL_TGT_USER}" }
+        if( ! [string]::IsNullOrEmpty(${env:WSL_TGT_PWD})) { $sfOdbc.ConnectionString += ";PWD=${env:WSL_TGT_PWD}" }
+    }
+    $sfOdbc.Open()
+    if((($runMode -ne "S3") -and ($runmode -ne "AZ") -and ($runmode -ne "GCS")) -or ( ! [string]::IsNullOrEmpty(${env:EXTERNAL_STAGE}))) { {%- br %}
+        if(($runMode -ne "S3") -and ($runmode -ne "AZ") -and ($runmode -ne "GCS") -and [string]::IsNullOrEmpty(${env:EXTERNAL_STAGE})) {
+            $remSQL = "remove @~/WSL-${env:WSL_SEQUENCE}-${env:WSL_TASK_KEY}*;"
+            if (![string]::IsNullOrEmpty($query_tag)) {
+              $null = (New-Object System.Data.Odbc.OdbcCommand($querytag_sql,$sfOdbc)).ExecuteNonQuery()
+            }
+            $null = (New-Object System.Data.Odbc.OdbcCommand($remSQL,$sfOdbc)).ExecuteNonQuery()
+            if(${env:SEND_FILES_ZIPPED} -eq "TRUE") {
+                $putSQL = "PUT 'file://$(${filePath}.Replace("\","/"))${fileDat}{% if table.loadInfo.sourceConnectionType.name != "Windows" %}*{%- endif %}.gz' @~/WSL-${env:WSL_SEQUENCE}-${env:WSL_TASK_KEY};"
+            }
+            else {
+                $putSQL = "PUT 'file://$(${filePath}.Replace("\","/"))${fileDat}{% if table.loadInfo.sourceConnectionType.name != "Windows" %}*{%- endif %}' @~/WSL-${env:WSL_SEQUENCE}-${env:WSL_TASK_KEY};"
+            }
+            if (![string]::IsNullOrEmpty($query_tag)) {
+              $snowsqlPut = "snowsql -q ""$putsql"" --query_tag ""$query_tag"" -o friendly=false  -o remove_comments=true -o output_format=csv -o timing=false"{%- br %}
+            }else{
+              $snowsqlPut = "snowsql -q ""$putsql"" -o friendly=false  -o remove_comments=true -o output_format=csv -o timing=false"{%- br %}
+            }
+            if(${env:DEBUG} -eq "TRUE") { {%- br %}
+                $logStream.WriteLine("BEGIN PUT of files matching ${filePath}${fileDat} : $(Get-Date)"){%- br %}
+            }{%- br %}
+            $logStream.WriteLine("PUT:"){%- br %}
+            $logStream.WriteLine($putSQL)
+            $logStream.WriteLine("")
+            $putRes = & $([ScriptBlock]::Create($snowsqlPut)){%- br %}
+            if(${env:DEBUG} -eq "TRUE") { {%- br %}
+                $logStream.WriteLine("END PUT of files matching ${env:filePath}${fileDat} : $(Get-Date)"){%- br %}
+            }{%- br %}
+        }{% br %}
+        {%- set noindent = "" %}
+        if( ! [string]::IsNullOrEmpty(${env:TIMEZONE})) {
+            $tzStmt = "ALTER SESSION SET TIMEZONE = '${env:TIMEZONE}';`r`n"
+            $logStream.WriteLine("SET TIMEZONE:")
+            $logStream.WriteLine($tzStmt)
+            $tzCmd = New-Object System.Data.Odbc.OdbcCommand($tzStmt,$sfOdbc)
+            if (![string]::IsNullOrEmpty($query_tag)) {
+              $null = (New-Object System.Data.Odbc.OdbcCommand($querytag_sql,$sfOdbc)).ExecuteNonQuery()
+            }
+            $null = $tzCmd.ExecuteNonQuery()
+        }
+
+
+        if(${env:FILE_TYPE} -eq "CSV") {
+            $copyStmt = @"
+            COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+            ( {{ noindent }}
+              {%- for col in table.columns %}
+                {%- if not loop.first %}
+            , {{ noindent }}
+                {%- endif %}
+            {{- noindent }}{{ col.name }}{%- br %}
+              {%- endfor %}
+            ){%- br %}
+            FROM ({%- br %}{% set csvPos = 0 %}
+              SELECT {% for col in table.columns %}
+                {%- if not loop.first %}                   , {% endif %}
+                {%- if (table.loadInfo.sourceConnectionType.name == "Windows") and (col.name == dssRecordSrc ) %}METADATA`$FILENAME
+                {%- elseif col.transformType.code == "A" %}{%- if hasNonDssAfterLoads == true %}NULL{%- else %}{{col.source}}{%- endif %}
+                {%- else %}
+                  {%- if (table.loadInfo.sourceConnectionType.name == "Windows") and (table.loadInfo.fileParsed == false ) %}{%- set csvPos = csvPos + 1 -%}t.`${{ csvPos }}
+                  {%- elseif table.loadInfo.sourceConnectionType.name == "Windows" %}{%- if col.sourceColumn is defined and col.sourceColumn.name|length > 0 -%}t.`${{ (col.sourceColumn.name).Replace("COL","") }}
+                  {%- else -%}{%- set csvPos = csvPos + 1 -%}t.`${{ csvPos }}
+                {%- endif -%}
+                  {%- else %}{%- set csvPos = csvPos + 1 -%}t.`${{ csvPos }}
+      {%- endif %}
+                {%- endif %}{% br %}
+              {%- endfor %}
+              FROM $(if ( [string]::IsNullOrWhiteSpace(${env:EXTERNAL_STAGE})) { "@~/WSL-${env:WSL_SEQUENCE}-${env:WSL_TASK_KEY}/ t" }
+                     else {if ( [string]::IsNullOrWhiteSpace(${fileDat}.Trim())){"@${env:EXTERNAL_STAGE}/ t"} else{ "@${env:EXTERNAL_STAGE}/${fileDat}/ t"}})
+            ){%- br %}
+            FILE_FORMAT = '${env:fileFormatFullName}'{%- br %}
+            PURGE = $PURGE{% br %}
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}
+        }
+        else {
+            $copyStmt = @"
+            COPY INTO ${env:WSL_LOAD_FULLNAME}
+            FROM @~/WSL-${env:WSL_SEQUENCE}-${env:WSL_TASK_KEY}/
+            FILE_FORMAT = '${env:fileFormatFullName}'{%- br %}
+            PURGE = $PURGE{% br %}
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@
+        }
+        $maskedLoad = $copyStmt{%- br %}
+        {%- br %}
+        $logStream.WriteLine("COPY:"){%- br %}
+        $logStream.WriteLine($maskedLoad)
+        if(${env:DEBUG} -eq "TRUE") { {%- br %}
+            $logStream.WriteLine("BEGIN COPY INTO '${env:WSL_LOAD_FULLNAME}' : $(Get-Date)"){%- br %}
+        }{%- br %}
+        try {
+                $copyCmd = New-Object System.Data.Odbc.OdbcCommand($copyStmt,$sfOdbc) {%- br %}
+                $copyCmd.CommandTimeout = 0 {%- br %}
+                $loadRes = New-Object Data.DataTable{%- br %}
+                if (![string]::IsNullOrEmpty($query_tag)) {
+                  $null = (New-Object System.Data.Odbc.OdbcCommand($querytag_sql,$sfOdbc)).ExecuteNonQuery()
+                }
+                $null = (New-Object Data.odbc.odbcDataAdapter($copyCmd)).fill($loadRes){%- br %}
+        }
+        catch {
+                {% if (table.loadInfo.sourceConnectionType.name == "ODBC") or (table.loadInfo.sourceConnectionType.name == "Database") -%}{%- br %}
+                if(${env:DEBUG} -ne "TRUE"){ {%- br %}
+                $logStream.WriteLine("================= CLEANUP FILES ===================") {%- br %}
+                $logStream.WriteLine("Cleaning ${fileDat} from SnowFlake stage") {%- br %}
+                if (![string]::IsNullOrEmpty($query_tag)) {
+                  $snowsqlDelete = "snowsql -q ""rm @~ pattern='.*$fileDat.*'"" --query_tag ""$query_tag"" -o friendly=false  -o remove_comments=true -o timing=false" {%- br %}
+                }else{
+                  $snowsqlDelete = "snowsql -q ""rm @~ pattern='.*$fileDat.*'"" -o friendly=false  -o remove_comments=true -o timing=false" {%- br %}
+                }
+                $putRes = & $([ScriptBlock]::Create($snowsqlDelete)) {%- br %}
+
+                foreach($df in $((Get-ChildItem "${filePath}${fileDat}*").FullName)){ {%- br %}
+                        $logStream.WriteLine("Cleaning file $df") {%- br %}
+                        Remove-Item -Path $df {%- br %}
+                }} {%- br %}
+                {%- endif %}
+                $logStream.WriteLine($_.Exception.InnerException.Message) {%- br %}
+                $scriptResultCode = 2 {%- br %}
+                $scriptResultMessage = "Load failed" {%- br %}
+                Exit-Script $scriptResultCode $scriptResultMessage {%- br %}
+        } {%- br %}
+
+        if(${env:DEBUG} -eq "TRUE") { {%- br %}
+            $logStream.WriteLine("END COPY INTO '${env:WSL_LOAD_FULLNAME}' : $(Get-Date)"){%- br %}
+        }{%- br %}
+        if(($loadRes.errors_seen | Measure-Object -Sum).Sum -eq 0) { {%- br %}
+            $rowsLoaded = ($loadRes.rows_loaded | Measure-Object -Sum).Sum{%- br %}
+            $logStream.WriteLine(($loadRes | Format-Table -Property file,status,rows_parsed,rows_loaded -AutoSize | Out-String))
+            $logStream.WriteLine("$rowsLoaded rows loaded.")
+            try {
+                $null = WsWrkTask -Inserted $rowsLoaded
+            } catch { $logStream.WriteLine("Failed to update task row count"); $logStream.WriteLine($_.Exception.InnerException.Message)}
+            {% if (table.loadInfo.sourceConnectionType.name == "ODBC") or (table.loadInfo.sourceConnectionType.name == "Database") -%}
+            if($rowCount -eq $rowsLoaded) { {%- br %}
+              $scriptResultCode = 0{%- br %}
+              $scriptResultMessage = "Load successful. Source rowcount $rowCount. $rowsLoaded rows loaded."{%- br %}
+              $logStream.WriteLine("Source rowcount $rowCount. $rowsLoaded rows loaded."){%- br %}
+             }{%- br %}
+            else { {%- br %}
+              $scriptResultCode = 2{%- br %}
+              $scriptResultMessage = "Source and Target rowcount does not match. Source rowcount $rowCount. Target rowcount $rowsLoaded."{%- br %}
+             }{%- br %}
+           {%- else %}
+              $scriptResultCode = 0{%- br %}
+              $scriptResultMessage = "Load successful. $rowsLoaded rows loaded."{%- br %}
+           {%- endif %}
+            if(${env:DEBUG} -ne "TRUE") { {%- br %}
+                {%- if table.loadInfo.sourceConnectionType.name != "Windows" %}
+                foreach($file in $dataFiles) { {%- br %}
+                    Remove-Item $file{%- br %}
+                }{%- br %}
+                $null = (New-Object System.Data.Odbc.OdbcCommand($remSQL,$sfOdbc)).ExecuteNonQuery(){% br %}
+                {%- else %}
+                if([string]::IsNullOrWhiteSpace(${env:EXTERNAL_STAGE})) {
+                if((${env:SEND_FILES_ZIPPED} -eq "TRUE") -or (${env:FILE_COUNT} -gt 1)) {
+                    Get-ChildItem $(Join-Path -Path $filePath -ChildPath $fileDat) | Remove-Item{%- br %}
+                }{% br %}
+                    $null = (New-Object System.Data.Odbc.OdbcCommand($remSQL,$sfOdbc)).ExecuteNonQuery(){% br %}
+                }{% br %}
+                {%- endif %}
+            }{%- br %}
+            else { {%- br %}
+                $logStream.WriteLine("Temporary data files not removed as debug mode is enabled"){%- br %}
+            }{%- br %}
+        }{%- br %}
+        else { {%- br %}
+            $logStream.WriteLine(($loadRes | Format-Table -Property file,status,rows_parsed,rows_loaded -AutoSize | Out-String))
+            $scriptResultCode = 2{%- br %}
+            $scriptResultMessage = "Load failed"{%- br %}
+            Exit-Script $scriptResultCode $scriptResultMessage{%- br %}
+        }{%- br %}
+        $sfOdbc.Close(){%- br %}
+        {%- if (table.loadInfo.archiveFile.path != "") or (table.loadInfo.archiveFile.name != "") and (table.loadInfo.sourceConnectionType.name == "Windows") %}
+        Archive-Files $sourceFiles{%- br %}
+        {%- endif %}
+        {%- if (table.loadInfo.triggerArchiveFile.path != "") or (table.loadInfo.triggerArchiveFile.name != "") and (table.loadInfo.sourceConnectionType.name == "Windows") %}
+        Archive-Trigger $(Join-Path -Path '{{ table.loadInfo.triggerFile.path }}' -ChildPath '{{ table.loadInfo.triggerFile.name }}' ){%- br %}
+        {%- endif %}
+    }{%- br %}
+    elseif($runmode -eq "S3") { {%- br %}
+        {%- set noindent = "" %}
+        $sourcefilename = '{{ table.loadInfo.sourceFile.name }}'
+            if( ! [string]::IsNullOrEmpty(${env:TIMEZONE})) {
+                $tzStmt = "ALTER SESSION SET TIMEZONE = '${env:TIMEZONE}';`r`n"
+                $logStream.WriteLine("SET TIMEZONE:")
+                $logStream.WriteLine($tzStmt)
+                $tzCmd = New-Object System.Data.Odbc.OdbcCommand($tzStmt,$sfOdbc)
+                $null = $tzCmd.ExecuteNonQuery()
+            }
+
+            if ("{{ table.loadInfo.sourceFile.headerLine }}" -eq "true") {
+                $skipheadervalue = 1
+            } else {
+                $skipheadervalue = 0
+            }
+            $sourceFilePath="{{ table.loadInfo.sourceFile.path }}".Trim()
+            if ($sourceFilePath[-1] -eq "/") {
+              $sourceFilePath = $sourceFilePath.TrimEnd('/')
+            }
+            $sourceFileFieldDelimiter='{{table.loadInfo.sourceFile.fieldDelimiter}}'
+            $sourceFileRecordDelimiter="{{table.loadInfo.sourceFile.recordDelimiter}}".Trim()
+            $sourceFileFieldEnclosure='{{table.loadInfo.sourceFile.fieldEnclosure}}'
+            if ($sourceFileFieldEnclosure.Trim() -eq ""){
+              $sourceFileFieldEnclosure='"'
+            }
+            if ($sourceFileRecordDelimiter.Trim() -eq "") {
+              $sourceFileRecordDelimiter = "\n"
+            }
+            $awsAccessKey=${env:ACCESS_KEY}
+            $fileDetails=$sourceFilePath.Trim()+"/"+$sourcefilename
+            if (($awsAccessKey -replace '\s', '') -eq "") {
+               $awsAccessKey='$WSL_SRCCFG_s3AccessKey$'
+            }
+            $awsSecretKey=${env:SECRET_KEY}
+            if (($awsSecretKey -replace '\s', '') -eq "") {
+              $awsSecretKey=${env:WSL_SRCCFG_s3SecretKey}
+            }
+      {% if (table.loadInfo.sourceConnectionType.name == "Configured Source Connection") and (table.loadInfo.sourceFile.path contains "s3://")  %}{%- br %}
+      $setAWSCred = Set-AWSCredential -AccessKey $awsAccessKey -SecretKey $awsSecretKey
+      $setAWSRegion = Set-DefaultAWSRegion -Region '$WSL_SRCCFG_s3Region$'{% br %}
+      # **********************************************************
+            # ************* F I L E    C H E C K ***********************
+            # **********************************************************{% br %}
+            # Check if source file exists on S3 Bucket{% br %}
+			$s3Bucket = '{{ table.loadInfo.sourceFile.path }}' -replace 's3://', ''
+			$s3Bucket = $s3Bucket.split("/")[0]
+			$s3Bucket = $s3Bucket -replace '/',''
+			$sourceFileDir = "$WSL_SRCCFG_s3Folder$/$sourcefilename"
+			{%- if table.loadInfo.wait %}
+			# **********************************************************
+			# ************* W A I T     T I M E R **********************
+			# **********************************************************
+			# If a wait time specified then loop looking for the file
+			# or trigger file to arrive until the wait time expires.{% br %}
+			$WAITSECS = {{ table.loadInfo.waitSeconds }}{% br %}
+			:waitloop while($WAITSECS -gt 0) {
+				# see if the file exists and if so skip the wait check
+				if(Get-S3Object -BucketName $s3Bucket -Key $sourceFileDir) {
+					break waitloop
+				}
+				Start-Sleep 5
+				$WAITSECS = $WAITSECS - 5
+			}
+			{%- else %} {%- br %}
+			$sourceFileStatus = Get-S3Object -BucketName $s3Bucket -Key $sourceFileDir {% br %}
+			if (!($sourceFileStatus)){ {%- br %}
+				$scriptResultCode = 2{%- br %}
+				$scriptResultMessage = "File $sourcefilename was not found. "
+				Exit-Script $scriptResultCode $scriptResultMessage
+			}
+			{%- endif %} {%- br %}
+			{%- if table.loadInfo.triggerFile.name|trim != "" %}
+			{%- if table.loadInfo.wait %}
+			$TRGFILE = '{{ table.loadInfo.triggerFile.path }}'{% br %}
+			$TRGFILE = $TRGFILE -replace 's3://', ''
+			$bucket = $s3Bucket + '/'
+			$TRGFILE = $TRGFILE -replace $bucket, ''
+			$TRGFILE = [System.IO.Path]::Combine($TRGFILE, '{{ table.loadInfo.triggerFile.name }}') {% br %}
+			$TRGFILE = $TRGFILE -replace '\\','/'
+			$logStream.WriteLine($TRGFILE)
+			$WAITSECS = {{ table.loadInfo.waitSeconds }}{% br %}
+			:waitloop while($WAITSECS -gt 0) { {%- br %}
+				# see if the file exists and if so skip the wait check
+				if(Get-S3Object -BucketName $s3Bucket -Key $TRGFILE) {
+					break waitloop
+				}
+				Start-Sleep 5
+				$WAITSECS = $WAITSECS - 5
+			}
+			{%- endif %}
+			{%- endif %}
+			{%- if table.loadInfo.wait %}
+			{% if table.loadInfo.triggerFile.name|trim != "" %}{% br %}
+			$fileName = '{{ table.loadInfo.triggerFile.name }}'
+			$isFileAvaliable = Get-S3Object -BucketName $s3Bucket -Key $TRGFILE
+			{%- else -%}{%- br %}
+			$fileName = $sourcefilename
+			$isFileAvaliable = Get-S3Object -BucketName $s3Bucket -Key $sourceFileDir
+			{%- endif %}{% br %}
+			{%- endif %}{% br %}
+
+			{%- if table.loadInfo.wait %}
+			if( ! ($isFileAvaliable) ) { {%- br %}
+				{%- if table.loadInfo.waitAction is defined %}
+				  {%- if table.loadInfo.waitAction.name == "Warning" %}
+				$scriptResultCode = -1{%- br %}
+				  {%- elseif table.loadInfo.waitAction.name == "Error" %}
+				$scriptResultCode = -2{%- br %}
+				  {%- elseif table.loadInfo.waitAction.name == "Fatal Error" %}
+				$scriptResultCode = -3{%- br %}
+				  {%- elseif table.loadInfo.waitAction.name == "Success" %}
+				$scriptResultCode = 1{%- br %}
+				  {%- endif %}
+				{%- else %}
+				$scriptResultCode = -1
+				{%- endif %}
+				$scriptResultMessage = "File $FILENAME was not found. "
+				Exit-Script $scriptResultCode $scriptResultMessage
+			}
+			{%- endif %}{% br %}
+			{%- endif %}{% br %}
+			{% if (table.loadInfo.archiveFile.path|trim != "") or (table.loadInfo.triggerFile.name|trim != "") %}{% br %}
+			$setAWSCred = Set-AWSCredential -AccessKey $awsAccessKey -SecretKey $awsSecretKey {%- br %}
+			$setAWSRegion = Set-DefaultAWSRegion -Region '$WSL_SRCCFG_s3Region$' {%- br %}
+			$s3Bucket = $('{{ table.loadInfo.sourceFile.path }}' -replace 's3://', '').split("/")[0]{%- br %}
+			$bucket = $s3Bucket + '/' {%- br %}
+      {% if (table.loadInfo.archiveFile.path|trim != "")%}{% br %}
+      $s3SourcePath = $fileDetails -replace $bucket, '' -replace 's3://', ''{% br %}
+			$arcSourceFilePath = [System.IO.Path]::Combine(($('{{table.loadInfo.archiveFile.path}}') -replace $bucket, '' -replace 's3://', ''), '{{table.loadInfo.archiveFile.name}}')
+			$arcSourceFilePath = $arcSourceFilePath -replace '\\','/' {%- br %}
+			$arcSourceFilePath = Replace-WslTags($arcSourceFilePath)
+			$s3ArchiveSFileCMD = "Copy-S3Object -BucketName '$s3Bucket' -Key '$s3SourcePath' -DestinationKey '$arcSourceFilePath' -DestinationBucket '$s3Bucket'" {%- br %}
+		  {%- endif %}{% br %}
+			{% if (table.loadInfo.triggerArchiveFile.name|trim != "")%}{% br %}
+			$s3TriggerPath  = [System.IO.Path]::Combine(($('{{ table.loadInfo.triggerFile.path }}') -replace $bucket, '' -replace 's3://', ''), '{{ table.loadInfo.triggerFile.name }}') {% br %}
+			$s3TriggerPath  = $s3TriggerPath -replace '\\','/' {%- br %}
+			$arcTriggerPath = [System.IO.Path]::Combine(($('{{table.loadInfo.triggerArchiveFile.path}}') -replace $bucket, '' -replace 's3://', ''), '{{table.loadInfo.triggerArchiveFile.name}}') {% br %}
+			$arcTriggerPath = $arcTriggerPath -replace '\\','/' {%- br %}
+			$arcTriggerPath = Replace-WslTags($arcTriggerPath)
+			$s3ArchiveTFileCMD = "Copy-S3Object -BucketName '$s3Bucket' -Key '$s3TriggerPath' -DestinationKey '$arcTriggerPath' -DestinationBucket '$s3Bucket'"
+      {%- endif %}{% br %}
+      {%- endif %}{% br %}
+
+{% block "GetExtendedProperty_s3prefix" %}{%br%}
+            $s3Prefix  = Get-ExtendedProperty -PropertyName "SF_S3_BUCKET_PREFIX" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+{% endblock %}
+			if(($s3Prefix.StartsWith("s3://"))){
+			$copyStmt = @"
+            COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+            FROM ${filePath}${fileDat}{%- br %}
+            CREDENTIALS = (AWS_KEY_ID='${env:ACCESS_KEY}' AWS_SECRET_KEY='${env:SECRET_KEY}'){%- br %}
+            FILE_FORMAT = '${env:fileFormatFullName}'{%- br %}
+            PURGE = $PURGE{% br %}
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}
+			}else{
+            $copyStmt = @"
+            COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+            FROM $fileDetails{%- br %}
+            CREDENTIALS = (AWS_KEY_ID='$awsAccessKey' AWS_SECRET_KEY='$awsSecretKey'){%- br %}
+            FILE_FORMAT = ( TYPE = csv FIELD_DELIMITER = '$sourceFileFieldDelimiter' SKIP_HEADER = $skipheadervalue RECORD_DELIMITER = '$sourceFileRecordDelimiter' FIELD_OPTIONALLY_ENCLOSED_BY = '$sourceFileFieldEnclosure' VALIDATE_UTF8 = FALSE ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE){%- br %}
+
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}
+            if ($sourcefilename.ToUpper().EndsWith('JSON')){
+               $copyStmt = @"
+               COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+               FROM '$fileDetails'{%- br %}
+               CREDENTIALS = (AWS_KEY_ID='$awsAccessKey' AWS_SECRET_KEY='$awsSecretKey')
+               FILE_FORMAT = (TYPE = 'JSON'  STRIP_OUTER_ARRAY = true ) {%- br %}
+
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}}
+
+            if ($sourcefilename.ToUpper().EndsWith('XML')){
+               $copyStmt = @"
+               COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+               FROM $fileDetails{%- br %}
+               CREDENTIALS = (AWS_KEY_ID='$awsAccessKey' AWS_SECRET_KEY='$awsSecretKey'){%- br %}{%- br %}
+               FILE_FORMAT = (TYPE = 'XML') {%- br %}
+							             {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}}
+			}
+            $maskedLoad = $copyStmt{%- br %}
+            if( ! [string]::IsNullOrWhiteSpace("$awsAccessKey")) { {%- br %}
+                $maskedLoad = $maskedLoad.Replace("$awsAccessKey",(New-Object String ('*', "$awsAccessKey".Length))){%- br %}
+            }{%- br %}
+            if( ! [string]::IsNullOrWhiteSpace($awsSecretKey)) { {%- br %}
+                $maskedLoad = $maskedLoad.Replace($awsSecretKey,(New-Object String ('*', $awsSecretKey.Length))){%- br %}
+            }{%- br %}
+            {%- br %}
+            $logStream.WriteLine("COPY:"){%- br %}
+            $logStream.WriteLine($maskedLoad)
+            $logStream.WriteLine("")
+            if(${env:DEBUG} -eq "TRUE") { {%- br %}
+                $logStream.WriteLine("BEGIN COPY INTO '${env:WSL_LOAD_FULLNAME}' : $(Get-Date)"){%- br %}
+            }{%- br %}
+            $copyCmd = New-Object System.Data.Odbc.OdbcCommand($copyStmt,$sfOdbc)
+            $copyCmd.CommandTimeout = 0
+            $loadRes = New-Object Data.DataTable{%- br %}
+            $null = (New-Object Data.odbc.odbcDataAdapter($copyCmd)).fill($loadRes){%- br %}
+            if(${env:DEBUG} -eq "TRUE") { {%- br %}
+                $logStream.WriteLine("END COPY INTO '${env:WSL_LOAD_FULLNAME}' : $(Get-Date)"){%- br %}
+            }{%- br %}
+            if(($loadRes.errors_seen | Measure-Object -Sum).Sum -eq 0) { {%- br %}
+                $rowsLoaded = ($loadRes.rows_loaded | Measure-Object -Sum).Sum{%- br %}
+                $logStream.WriteLine(($loadRes | Where { $_.file -ne "" } | Format-Table -Property file,status,rows_parsed,rows_loaded -AutoSize | Out-String))
+                $logStream.WriteLine("$rowsLoaded rows loaded.")
+                try {
+                    $null = WsWrkTask -Inserted $rowsLoaded
+                } catch { $logStream.WriteLine("Failed to update task row count"); $logStream.WriteLine($_.Exception.InnerException.Message)}
+                $scriptResultCode = 0{%- br %}
+                $scriptResultMessage = "Load successful. $rowsLoaded rows loaded."{%- br %}
+               {% if (table.loadInfo.archiveFile.path|trim != "") %}{% br %}
+							  try {
+										$archiveSResult = Invoke-Expression $s3ArchiveSFileCMD
+								}
+								catch {
+                        $scriptResultCode = 2{%- br %}
+                        $logStream.WriteLine("Failed to archive source file");
+                        $logStream.WriteLine($_.Exception.InnerException.Message)
+                    }
+                    if($archiveSResult){
+                        $logStream.WriteLine("Source File archive successful")
+                        $removeSOriginalFile = Remove-S3Object -BucketName $s3Bucket -Key $s3SourcePath -Force
+												if($removeSOriginalFile){
+                            $logStream.WriteLine("$s3SourcePath Moved to $arcSourceFilePath")
+                            }
+												 }else{
+                        $scriptResultCode = 2{%- br %}
+                        $scriptResultMessage = "Source File archive failed"{%- br %}
+                       }
+						      {%- endif %}{% br %}
+
+								{% if (table.loadInfo.triggerArchiveFile.name|trim != "") %}
+                $arcTrigger = Invoke-Expression 'Get-S3Object -BucketName $s3Bucket -Key $s3TriggerPath'
+                if($arcTrigger){
+                    try {
+                        $archiveTResult = Invoke-Expression $s3ArchiveTFileCMD
+												}
+                    catch {
+                        $scriptResultCode = -1{%- br %}
+                        $logStream.WriteLine("Failed to archive Trigger file");
+                        $logStream.WriteLine($_.Exception.InnerException.Message)
+                        }
+								     }
+                        if($archiveTResult){
+                        $logStream.WriteLine("Trigger File archive successful")
+                        $removeTOriginalFile = Remove-S3Object -BucketName $s3Bucket -Key $s3TriggerPath -Force
+                        if($removeTOriginalFile){
+                            $logStream.WriteLine("$s3TriggerPath Moved to $arcTriggerPath ")
+                        }
+                    }else{
+                        $scriptResultCode = 2{%- br %}
+                        $scriptResultMessage = "File archive failed"{%- br %}
+                    }
+                    {%- endif %}{% br %}
+            }{%- br %}
+            else { {%- br %}
+                $logStream.WriteLine(($loadRes | Format-Table -Property file,status,rows_parsed,rows_loaded -AutoSize | Out-String))
+                $scriptResultCode = 2{%- br %}
+                $scriptResultMessage = "Load failed"{%- br %}
+                Exit-Script $scriptResultCode $scriptResultMessage{%- br %}
+            }{%- br %}
+            $sfOdbc.Close(){%- br %}
+        }{%- br %}
+  {% if (table.loadInfo.sourceConnectionType.name == "Configured Source Connection") and (table.loadInfo.sourceFile.path contains "gs://")  %}{%- br %}
+    elseif($runmode -eq "GCS") { {%- br %}
+        {%- set noindent = "" %}
+      $gcsPath = "{{ table.loadInfo.sourceFile.path }}"
+      $gcsPath = $gcsPath -replace "gs://", "gcs://"
+      $fileName = "{{ table.loadInfo.sourceFile.name }}"
+      $sourcefilename = '{{ table.loadInfo.sourceFile.name }}'
+            if( ! [string]::IsNullOrEmpty(${env:TIMEZONE})) {
+                $tzStmt = "ALTER SESSION SET TIMEZONE = '${env:TIMEZONE}';`r`n"
+                $logStream.WriteLine("SET TIMEZONE:")
+                $logStream.WriteLine($tzStmt)
+                $tzCmd = New-Object System.Data.Odbc.OdbcCommand($tzStmt,$sfOdbc)
+                $null = $tzCmd.ExecuteNonQuery()
+            }
+            if ("{{ table.loadInfo.sourceFile.headerLine }}" -eq "true") {
+                $skipheadervalue = 1
+            } else {
+                $skipheadervalue = 0
+            }
+            $sourceFileFieldDelimiter='{{table.loadInfo.sourceFile.fieldDelimiter}}'
+            $sourceFileRecordDelimiter="{{table.loadInfo.sourceFile.recordDelimiter}}".Trim()
+            $sourceFileFieldEnclosure='{{table.loadInfo.sourceFile.fieldEnclosure}}'
+						if ($sourceFileFieldEnclosure.Trim() -eq ""){
+							$sourceFileFieldEnclosure='"'
+						}
+            if ($sourceFileRecordDelimiter.Trim() -eq "") {
+              $sourceFileRecordDelimiter = "\n"
+			      }
+            $copyStmt = @"
+            COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+            FROM '$gcsPath/$fileName'{%- br %}
+            STORAGE_INTEGRATION = ${env:GCS_STORAGE_INTEGRATION}
+            FILE_FORMAT = ( TYPE = csv FIELD_DELIMITER = '$sourceFileFieldDelimiter' SKIP_HEADER = $skipheadervalue RECORD_DELIMITER = '$sourceFileRecordDelimiter' FIELD_OPTIONALLY_ENCLOSED_BY = '$sourceFileFieldEnclosure' VALIDATE_UTF8 = FALSE ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE){%- br %}
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}
+            if ($sourcefilename.ToUpper().EndsWith('JSON')){
+               $copyStmt = @"
+               COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+               FROM '$gcsPath/$fileName'{%- br %}
+               STORAGE_INTEGRATION = ${env:GCS_STORAGE_INTEGRATION}
+               FILE_FORMAT = (TYPE = 'JSON'  STRIP_OUTER_ARRAY = true ) {%- br %}
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}}
+            if ($sourcefilename.ToUpper().EndsWith('XML')){
+               $copyStmt = @"
+               COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+               FROM '$gcsPath/$fileName'{%- br %}
+               STORAGE_INTEGRATION = ${env:GCS_STORAGE_INTEGRATION}
+               FILE_FORMAT = (TYPE = 'XML') {%- br %}
+							             {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}}
+            $getFileList = "list @${env:GCS_STAGE_AREA_NAME}"
+            $gcsStage = New-Object System.Data.Odbc.OdbcCommand($getFileList,$sfOdbc)
+			$gcsStage.CommandTimeout = 0
+            $gcsStageList = New-Object Data.DataTable
+			$null = (New-Object Data.odbc.odbcDataAdapter($gcsStage)).fill($gcsStageList)
+			$fileList = @()
+			foreach ($item in $gcsStageList) {
+                $fileList += $item[0]
+            }
+			if ("$gcsPath/$fileName" -in $fileList) {
+				$logStream.WriteLine("COPY:"){%- br %}
+				$logStream.WriteLine("")
+				if(${env:DEBUG} -eq "TRUE") { {%- br %}
+					$logStream.WriteLine("BEGIN COPY INTO '${env:WSL_LOAD_FULLNAME}' : $(Get-Date)"){%- br %}
+				}{%- br %}
+				$copyCmd = New-Object System.Data.Odbc.OdbcCommand($copyStmt,$sfOdbc)
+				$copyCmd.CommandTimeout = 0
+				$loadRes = New-Object Data.DataTable{%- br %}
+				$null = (New-Object Data.odbc.odbcDataAdapter($copyCmd)).fill($loadRes){%- br %}
+				if(${env:DEBUG} -eq "TRUE") { {%- br %}
+					$logStream.WriteLine("END COPY INTO '${env:WSL_LOAD_FULLNAME}' : $(Get-Date)"){%- br %}
+				}{%- br %}
+				if(($loadRes.errors_seen | Measure-Object -Sum).Sum -eq 0) { {%- br %}
+					$rowsLoaded = ($loadRes.rows_loaded | Measure-Object -Sum).Sum{%- br %}
+					$logStream.WriteLine(($loadRes | Where { $_.file -ne "" } | Format-Table -Property file,status,rows_parsed,rows_loaded -AutoSize | Out-String))
+					$logStream.WriteLine("$rowsLoaded rows loaded.")
+					try {
+						$null = WsWrkTask -Inserted $rowsLoaded
+					} catch { $logStream.WriteLine("Failed to update task row count"); $logStream.WriteLine($_.Exception.InnerException.Message)}
+					$scriptResultCode = 0{%- br %}
+					$scriptResultMessage = "Load successful.$rowsLoaded rows loaded."{%- br %}
+				}{%- br %}
+				else { {%- br %}
+					$logStream.WriteLine(($loadRes | Format-Table -Property file,status,rows_parsed,rows_loaded -AutoSize | Out-String))
+					$scriptResultCode = 2{%- br %}
+					$scriptResultMessage = "Load failed"{%- br %}
+					Exit-Script $scriptResultCode $scriptResultMessage{%- br %}
+				}{%- br %}
+				$sfOdbc.Close(){%- br %}
+			}else{
+                $scriptResultCode = 2{%- br %}
+                $scriptResultMessage = "File not available in staging area"{%- br %}
+            }
+        }{%- br %}
+    {%- endif %}{% br %}
+    elseif($runmode -eq "AZ") { {%- br %}
+            {%- set noindent = "" %}
+            if( ! [string]::IsNullOrEmpty(${env:TIMEZONE})) {
+                $tzStmt = "ALTER SESSION SET TIMEZONE = '${env:TIMEZONE}';`r`n"
+                $logStream.WriteLine("SET TIMEZONE:")
+                $logStream.WriteLine($tzStmt)
+                $tzCmd = New-Object System.Data.Odbc.OdbcCommand($tzStmt,$sfOdbc)
+                $null = $tzCmd.ExecuteNonQuery()
+            }
+
+			      if ("{{ table.loadInfo.sourceFile.headerLine }}" -eq "true") {
+                $skipheadervalue = 1
+            } else {
+                $skipheadervalue = 0
+            }
+
+           $azureSasToken=${env:AZ_SAS_TOKEN}
+           $sourceFileRecordDelimiter="{{table.loadInfo.sourceFile.recordDelimiter}}".Trim()
+           $sourceFileFieldDelimiter='{{table.loadInfo.sourceFile.fieldDelimiter}}'
+           $sourceFileFieldEnclosure='{{table.loadInfo.sourceFile.fieldEnclosure}}'
+		   if ($sourceFileFieldEnclosure.Trim() -eq ""){
+				$sourceFileFieldEnclosure='"'
+		   }
+           if ($sourceFileRecordDelimiter.Trim() -eq "") {
+                $sourceFileRecordDelimiter = "\n"
+		   }
+
+           if ($azureSasToken -eq $null){
+               $azureSasToken= ${env:WSL_SRCCFG_azureSASToken}}
+
+           if ($sourceFileRecordDelimiter.Trim() -eq "") {
+              $sourceFileRecordDelimiter = "\n"
+			      }
+
+            $sourceFilePath = ${filePath}.Replace("https://","azure://").Replace("dfs.core.windows.net","blob.core.windows.net")
+						$fileName = $fileDat.ToUpper()
+            $copyStmt = @"
+            COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+            FROM '$sourceFilePath$fileDat'{%- br %}
+            CREDENTIALS = (AZURE_SAS_TOKEN='$azureSasToken'){%- br %}
+            FILE_FORMAT = ( TYPE = csv VALIDATE_UTF8 = FALSE ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE FIELD_DELIMITER = '$sourceFileFieldDelimiter' SKIP_HEADER = $skipheadervalue RECORD_DELIMITER = '$sourceFileRecordDelimiter' FIELD_OPTIONALLY_ENCLOSED_BY = '$sourceFileFieldEnclosure'){%- br %}
+
+
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}
+
+            if ($fileName.EndsWith('JSON')){
+               $copyStmt = @"
+               COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+               FROM '$sourceFilePath$fileDat'{%- br %}
+               CREDENTIALS = (AZURE_SAS_TOKEN='$azureSasToken'){%- br %}
+               FILE_FORMAT = (TYPE = 'JSON'  STRIP_OUTER_ARRAY = true ) {%- br %}
+
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}}
+
+
+            if ($fileName.EndsWith('XML')){
+               $copyStmt = @"
+               COPY INTO ${env:WSL_LOAD_FULLNAME}{% br %}
+               FROM '$sourceFilePath$fileDat'{%- br %}
+               CREDENTIALS = (AZURE_SAS_TOKEN='$azureSasToken'){%- br %}
+               FILE_FORMAT = (TYPE = 'XML') {%- br %}
+
+            {%- if table.loadInfo.fileLoaderOptions != "" %}
+            {{ table.loadInfo.fileLoaderOptions }}{%- br %}
+            {%- endif %}
+"@{%- br %}}
+
+            $maskedLoad = $copyStmt{%- br %}
+            if( ! [string]::IsNullOrWhiteSpace($azureSasToken)) {
+                $maskedLoad = $maskedLoad.Replace($azureSasToken,(New-Object String ('*', $azureSasToken.Length)))
+            }
+            if( ! [string]::IsNullOrWhiteSpace(${env:AZ_ENCRYPTION_KEY})) {
+                $maskedLoad = $maskedLoad.Replace(${env:AZ_ENCRYPTION_KEY},(New-Object String ('*', ${env:AZ_ENCRYPTION_KEY}.Length)))
+            }{%- br %}
+            {%- br %}
+            $logStream.WriteLine("COPY:"){%- br %}
+            $logStream.WriteLine($maskedLoad)
+            $logStream.WriteLine("")
+            if(${env:DEBUG} -eq "TRUE") { {%- br %}
+                $logStream.WriteLine("BEGIN COPY INTO '${env:WSL_LOAD_FULLNAME}' : $(Get-Date)"){%- br %}
+            }{%- br %}
+            $copyCmd = New-Object System.Data.Odbc.OdbcCommand($copyStmt,$sfOdbc)
+            $copyCmd.CommandTimeout = 0
+            $loadRes = New-Object Data.DataTable{%- br %}
+            $null = (New-Object Data.odbc.odbcDataAdapter($copyCmd)).fill($loadRes){%- br %}
+            if(${env:DEBUG} -eq "TRUE") { {%- br %}
+                $logStream.WriteLine("END COPY INTO '${env:WSL_LOAD_FULLNAME}' : $(Get-Date)"){%- br %}
+            }{%- br %}
+            if(($loadRes.errors_seen | Measure-Object -Sum).Sum -eq 0) { {%- br %}
+                $rowsLoaded = ($loadRes.rows_loaded | Measure-Object -Sum).Sum{%- br %}
+                $logStream.WriteLine(($loadRes | Where { $_.file -ne "" } | Format-Table -Property file,status,rows_parsed,rows_loaded   | Out-String -width 500 ))
+                $logStream.WriteLine("$rowsLoaded rows loaded.")
+                try {
+                    $null = WsWrkTask -Inserted $rowsLoaded
+                } catch { $logStream.WriteLine("Failed to update task row count"); $logStream.WriteLine($_.Exception.InnerException.Message)}
+                $scriptResultCode = 0{%- br %}
+                $scriptResultMessage = "Load successful.$rowsLoaded rows loaded."{%- br %}
+            }{%- br %}
+            else { {%- br %}
+                $logStream.WriteLine(($loadRes | Format-Table -Property file,status,rows_parsed,rows_loaded -AutoSize | Out-String))
+                $scriptResultCode = 2{%- br %}
+                $scriptResultMessage = "Load failed"{%- br %}
+                Exit-Script $scriptResultCode $scriptResultMessage{%- br %}
+            }{%- br %}
+            $sfOdbc.Close(){%- br %}
+    }
+  return $scriptResultCode, $scriptResultMessage
+}{%- br %}
+{%- br %}
+try { {%- br %}
+
+    # Get the environment variable value
+    $loadTable = ${env:WSL_LOAD_TABLE}
+
+    # Check if the length of $loadTable exceeds 140 characters
+    if ($loadTable.Length -gt 140) {
+        # Trim it to 140 characters from the beginning
+        $loadTable = $loadTable.Substring(0, 140)
+        $fileAud = Join-Path -Path ${env:WSL_WORKDIR} -ChildPath "${loadTable}_${env:WSL_SEQUENCE}.txt"{%- br %}
+    }else {
+        $fileAud = Join-Path -Path ${env:WSL_WORKDIR} -ChildPath "${env:WSL_LOAD_TABLE}_${env:WSL_SEQUENCE}.txt"{%- br %}
+    }
+
+
+    $logStream = New-Object IO.StreamWriter($FileAud,$false){%- br %}
+    $logStream.AutoFlush = $true{%- br %}
+    {%- br %}
+    Add-Type -Path $(Join-Path -Path ${env:WSL_BINDIR} -ChildPath 'WslMetadataServiceClient.dll'){%- br %}
+    $metaDbType = [WslMetadataServiceClient.MetaDatabaseType]::SqlServer{%- br %}
+    if( ! ${env:WSL_WORKDIR}.EndsWith('\')) { {%- br %}
+        ${env:WSL_WORKDIR} += '\'{%- br %}
+    }{%- br %}
+    {% if (table.loadInfo.sourceConnectionType.name == "ODBC") or (table.loadInfo.sourceConnectionType.name == "Database") -%}
+    $runMode = "Database"{%- br %}
+    {%- else -%}
+		if ([System.Environment]::Is64BitProcess) {
+        $metaArch = [WslMetadataServiceClient.Architecture]::_64bit
+				# Metadata DSN, Meta DB Type enum, Metadata User, Metadata Password, Metadata schema
+        $repo = New-Object WslMetadataServiceClient.Repo(${env:WSL_META_DSN},$metaDbType,${env:WSL_META_USER},${env:WSL_META_PWD},${env:WSL_META_SCHEMA},$metaArch)
+    }
+    else {
+        # Metadata DSN, Meta DB Type enum, Metadata User, Metadata Password, Metadata schema{%- br %}
+        $repo = New-Object WslMetadataServiceClient.Repo(${env:WSL_META_DSN},$metaDbType,${env:WSL_META_USER},${env:WSL_META_PWD},${env:WSL_META_SCHEMA}){%- br %}
+    }
+{% block "GetExtendedProperty_sourcePrefix" %}{%br%}
+    $sourcePrefix  = Get-ExtendedProperty -PropertyName "SF_S3_BUCKET_PREFIX" -TableName ${env:WSL_LOAD_TABLE}{%- br %}
+{% endblock %}
+    $repo.Dispose(){%- br %}
+    if([string]::IsNullOrWhiteSpace($sourcePrefix)) { {%- br %}
+        $sourcePrefix  = '{{ table.loadInfo.sourceFile.path }}'.Replace("/ ","").Trim(){%- br %}{% br %}
+    }{%- br %}
+    if($sourcePrefix.StartsWith("s3://")) { {%- br %}
+        $runMode = "S3"{%- br %}
+    }{%- br %}
+	{% if (table.loadInfo.sourceConnectionType.name == "Configured Source Connection") and (table.loadInfo.sourceFile.path contains "gs://")  %}{%- br %}
+    elseif($sourcePrefix.StartsWith("gs://")) { {%- br %}
+        $runMode = "GCS"{%- br %}
+        }
+    {%- endif %}{% br %}
+    elseif($sourcePrefix.StartsWith("https://")) { {%- br %}
+        $runMode = "AZ"{%- br %}
+        }{%- br %}
+    else { {%- br %}
+        {%- if (table.loadInfo.sourceConnectionType.name == "Configured Source Connection") and (table.loadInfo.sourceFile.path contains "GoogleDriveFiles")  %}
+        {%- if (table.loadInfo.uiConfigLoadProperties.fileID != "")  %}
+        # Function to download files from Google Drive will be called from WslPowershellTemplate{%- br %}
+        Get-GoogleDriveFiles -fileId "{{table.loadInfo.uiConfigLoadProperties.fileID}}" -path "$WSL_SRCCFG_googleDriveCredentialsFilePath$\token.json" -downloadPath "${env:WSL_WORKDIR}\GoogleDriveFiles"{%- br %}
+        {%- endif %}
+        {%- endif %}
+        $runMode = "Windows"{%- br %}
+        }{%- br %}
+    {%- endif %}
+    ${env:warn} = $false{%- br %}
+    {%- br %}
+    $results = Load-Data{%- br %}
+		{%- br %}
+    $scriptResultCode = $results[0]{%- br %}
+    $scriptResultMessage = $results[1]{%- br %}
+    Exit-Script $scriptResultCode $scriptResultMessage{%- br %}
+}{%- br %}
+catch { {%- br %}
+    try { {%- br %}
+        $repo.Dispose(){%- br %}
+    }{%- br %}
+    catch {}{%- br %}
+    $scriptResultCode = 2{%- br %}
+    $scriptResultMessage = "Load failed"{%- br %}
+    $logStream.WriteLine($_.Exception.Message){%- br %}
+    $logStream.WriteLine($_.InvocationInfo.PositionMessage){%- br %}
+    Exit-Script $scriptResultCode $scriptResultMessage{%- br %}
+}{%- br %}

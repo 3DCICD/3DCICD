@@ -1,0 +1,9 @@
+
+    {
+        "Operation": "modify",
+        "Configuration": {
+            "name": "Data Warehouse",
+            "dtm-set-name": "SNOWFLAKE from SNOWFLAKE",
+            "table/column information sql block": "wsl_snowflake_table_information"
+        }
+    }

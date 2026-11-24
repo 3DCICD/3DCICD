@@ -1,0 +1,8 @@
+
+    {
+        "Operation": "modify",
+        "Configuration": {
+            "name": "Database Source System",
+            "dtm-set-name": "SNOWFLAKE from SQL Server"
+        }
+    }
